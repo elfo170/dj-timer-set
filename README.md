@@ -35,6 +35,18 @@ npm run tauri build
 
 O instalador `.msi` fica em `src-tauri/target/release/bundle/msi/`.
 
+
+## ⚠️ Ativar o CI (passo único)
+
+O token usado no deploy não tinha o escopo `workflow`, então o GitHub bloqueou o push do arquivo de workflow. O YAML já está pronto em [`.github/release-workflow.yml`](.github/release-workflow.yml). Para ativar:
+
+1. No GitHub: **Add file → Create new file**.
+2. Caminho: `.github/workflows/release.yml`.
+3. Cole o conteúdo de `.github/release-workflow.yml` e faça o commit.
+4. Em **Actions → Release → Run workflow**, informe a tag `v0.1.0` (já publicada). O `.msi` sai na aba **Releases**.
+
+Nas próximas versões, basta enviar uma nova tag `v*` que a release sai sozinha.
+
 ## Release automática
 
 Ao enviar uma tag `v*` (ex.: `v0.1.0`), o GitHub Actions compila o app no Windows e publica o `.msi` na aba Releases.
