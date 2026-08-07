@@ -1,0 +1,59 @@
+name: Build Check (branch)
+
+on:
+  push:
+    branches:
+      - "feature/**"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  check-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      # bundled-sqlcipher (sem vendored-openssl, que é instável no Windows —
+      # ver comentário no Cargo.toml) precisa de um OpenSSL do sistema para
+      # linkar contra. O runner windows-latest não vem com ele por padrão.
+      - name: Install OpenSSL
+        run: choco install openssl -y --no-progress
+        shell: pwsh
+
+      - name: Point Cargo at OpenSSL
+        run: echo "OPENSSL_DIR=C:\Program Files\OpenSSL-Win64" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+        shell: pwsh
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Frontend build (tsc + vite)
+        run: npm run build
+
+      # Roda os testes Rust de verdade num Windows real — incluindo o teste
+      # de ponta a ponta que cria um master.db sintético cifrado com
+      # SQLCipher e valida a leitura completa (chave, joins, árvore de
+      # playlists). É a validação mais próxima do ambiente real que dá pra
+      # automatizar sem um Rekordbox instalado.
+      - name: Rust tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml --verbose
+
+      - name: Rust build
+        run: cargo build --manifest-path src-tauri/Cargo.toml --verbose

@@ -45,6 +45,46 @@ git tag v0.1.1
 git push origin v0.1.1
 ```
 
+## Fonte "tempo real" (SQLite/master.db) — experimental
+
+Branch `feature/sqlite-realtime-source`, ainda não mesclada na `main`.
+
+Além do XML, o app tenta ler o `master.db` do Rekordbox diretamente (mesma
+pasta do `rekordbox.xml`), sem precisar exportar nada manualmente — reflete
+mudanças de playlist/hot cue na hora. Se essa leitura falhar por qualquer
+motivo, o app cai para o XML automaticamente e avisa na barra de fonte, no
+topo da tela principal.
+
+**Por que isso é experimental:** o `master.db` é cifrado (SQLCipher) e três
+detalhes não puderam ser validados contra um arquivo real durante o
+desenvolvimento (sem Windows + Rekordbox disponíveis no ambiente onde o
+código foi escrito):
+
+1. **Chave de criptografia.** Desde a v6.6.5 do Rekordbox a chave não é mais
+   extraível automaticamente da instalação. O app usa uma chave conhecida da
+   comunidade como padrão; se ela não bater com a sua instalação, a interface
+   deixa você colar uma chave manualmente (persiste para as próximas leituras).
+2. **Mapeamento Hot Cue A/B.** Assumimos `Kind=1` → A e `Kind=2` → B na tabela
+   `djmdCue`, por analogia com o XML.
+3. **Escala do BPM.** Assumimos que a coluna `BPM` vem ×100 (mesma convenção
+   dos arquivos de análise do Rekordbox).
+
+Validar é simples: abra uma playlist com a fonte "Banco (tempo real)", anote
+os tempos, troque para "XML exportado" na mesma playlist e compare. Se
+baterem, as três premissas acima estão corretas para a sua instalação.
+
+**Limitação conhecida:** playlists inteligentes (smart playlists) não
+aparecem quando a fonte é o banco — a condição fica salva como XML dentro do
+banco e não é avaliada nesta versão. O XML exportado já vem com o conteúdo
+resolvido, então continua funcionando normalmente nessa fonte.
+
+Detalhes técnicos completos (procedência da chave, queries SQL, por que
+`bundled-sqlcipher` em vez de `bundled-sqlcipher-vendored-openssl`) estão
+comentados no topo de `src-tauri/src/sqlite_source.rs`. Os testes automáticos
+em `src-tauri/src/sqlite_source.rs` (`cargo test`) criam um `master.db`
+sintético cifrado e validam a leitura de ponta a ponta — rodam localmente e
+no workflow `build-check.yml` a cada push nesta branch.
+
 ## Arquitetura
 
 ```
