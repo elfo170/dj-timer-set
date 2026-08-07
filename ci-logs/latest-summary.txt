@@ -1,0 +1,2 @@
+test outcome: failure
+build outcome: skipped
