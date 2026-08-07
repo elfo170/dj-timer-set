@@ -32,14 +32,23 @@ jobs:
 
       # bundled-sqlcipher (sem vendored-openssl, que é instável no Windows —
       # ver comentário no Cargo.toml) precisa de um OpenSSL do sistema para
-      # linkar contra. O runner windows-latest não vem com ele por padrão.
-      - name: Install OpenSSL
-        run: choco install openssl -y --no-progress
+      # linkar contra. windows-latest já vem com vcpkg pré-instalado — é mais
+      # confiável que choco (link estático, sem depender de DLL da OpenSSL no
+      # executável final).
+      - name: Install OpenSSL via vcpkg
         shell: pwsh
-
-      - name: Point Cargo at OpenSSL
-        run: echo "OPENSSL_DIR=C:\Program Files\OpenSSL-Win64" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-        shell: pwsh
+        run: |
+          vcpkg install openssl:x64-windows-static-md
+          $installed = "$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows-static-md"
+          if (-not (Test-Path "$installed\include\openssl\ssl.h")) {
+            Write-Error "Cabecalhos da OpenSSL nao encontrados em $installed\include"
+            Get-ChildItem "$env:VCPKG_INSTALLATION_ROOT\installed" -Recurse -Depth 2 | Select-Object FullName
+            exit 1
+          }
+          echo "OPENSSL_DIR=$installed" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          echo "OPENSSL_INCLUDE_DIR=$installed\include" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          echo "OPENSSL_LIB_DIR=$installed\lib" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          echo "OPENSSL_STATIC=1" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Install frontend dependencies
         run: npm ci
