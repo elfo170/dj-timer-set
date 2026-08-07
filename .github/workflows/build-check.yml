@@ -7,7 +7,7 @@ on:
   workflow_dispatch: {}
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   check-windows:
@@ -50,10 +50,45 @@ jobs:
       # Roda os testes Rust de verdade num Windows real — incluindo o teste
       # de ponta a ponta que cria um master.db sintético cifrado com
       # SQLCipher e valida a leitura completa (chave, joins, árvore de
-      # playlists). É a validação mais próxima do ambiente real que dá pra
-      # automatizar sem um Rekordbox instalado.
+      # playlists). Saída sempre capturada em arquivo (ver step de log
+      # abaixo) porque os logs do Actions redirecionam pra blob storage,
+      # inacessível fora do navegador/gh cli.
       - name: Rust tests
-        run: cargo test --manifest-path src-tauri/Cargo.toml --verbose
+        id: rust_tests
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          cargo test --manifest-path src-tauri/Cargo.toml --verbose 2>&1 | Tee-Object -FilePath rust-test-output.log
+          exit $LASTEXITCODE
 
       - name: Rust build
-        run: cargo build --manifest-path src-tauri/Cargo.toml --verbose
+        id: rust_build
+        if: steps.rust_tests.outcome == 'success'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          cargo build --manifest-path src-tauri/Cargo.toml --verbose 2>&1 | Tee-Object -FilePath rust-build-output.log
+          exit $LASTEXITCODE
+
+      # Commita os logs de volta no repo (sempre, sucesso ou falha) pra
+      # serem lidos via a Contents API — sem isso, só dá pra ver no navegador.
+      - name: Publish logs to repo
+        if: always()
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          New-Item -ItemType Directory -Force -Path ci-logs | Out-Null
+          "test outcome: ${{ steps.rust_tests.outcome }}" | Out-File -FilePath ci-logs/latest-summary.txt
+          "build outcome: ${{ steps.rust_build.outcome }}" | Out-File -FilePath ci-logs/latest-summary.txt -Append
+          if (Test-Path rust-test-output.log) { Copy-Item rust-test-output.log ci-logs/latest-test.log -Force }
+          if (Test-Path rust-build-output.log) { Copy-Item rust-build-output.log ci-logs/latest-build.log -Force }
+          git add ci-logs
+          git commit -m "ci: log da última execução [skip ci]" --allow-empty
+          git pull --rebase origin ${{ github.ref_name }}
+          git push origin HEAD:${{ github.ref_name }}
+
+      - name: Fail job if Rust steps failed
+        if: steps.rust_tests.outcome != 'success' || steps.rust_build.outcome != 'success'
+        run: exit 1
+        shell: pwsh
