@@ -1,0 +1,63 @@
+name: Preview Release (SQLite source)
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag da release de preview (ex.: sqlite-preview-1)"
+        required: true
+        default: "sqlite-preview-1"
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      # Mesma correção validada em build-check.yml: bundled-sqlcipher precisa
+      # de OpenSSL pra linkar, e vcpkg (pré-instalado no runner) é o caminho
+      # confiável no Windows — link estático, sem DLL extra no .msi final.
+      - name: Install OpenSSL via vcpkg
+        shell: pwsh
+        run: |
+          vcpkg install openssl:x64-windows-static-md
+          $installed = "$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows-static-md"
+          echo "OPENSSL_DIR=$installed" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          echo "OPENSSL_INCLUDE_DIR=$installed\include" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          echo "OPENSSL_LIB_DIR=$installed\lib" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          echo "OPENSSL_STATIC=1" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build and release MSI (preview)
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.event.inputs.tag }}
+          releaseName: "DJ Set Timer — preview SQLite (${{ github.event.inputs.tag }})"
+          releaseBody: |
+            Build de teste da branch `feature/sqlite-realtime-source` — leitura em
+            tempo real do master.db do Rekordbox, com fallback automático pro XML.
+            Não é uma release estável; não mesclado na main ainda.
+          releaseDraft: false
+          prerelease: true
