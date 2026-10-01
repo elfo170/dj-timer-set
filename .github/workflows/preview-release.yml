@@ -32,9 +32,6 @@ jobs:
         with:
           workspaces: src-tauri
 
-      # Mesma correção validada em build-check.yml: bundled-sqlcipher precisa
-      # de OpenSSL pra linkar, e vcpkg (pré-instalado no runner) é o caminho
-      # confiável no Windows — link estático, sem DLL extra no .msi final.
       - name: Install OpenSSL via vcpkg
         shell: pwsh
         run: |
@@ -48,16 +45,44 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
-      - name: Build and release MSI (preview)
-        uses: tauri-apps/tauri-action@v0
+      # Build manual (em vez do tauri-action) pra poder capturar e persistir
+      # o log real em caso de falha — o log do Actions redireciona pra blob
+      # storage inacessível fora do navegador/gh cli.
+      - name: Build Tauri app (bundle MSI)
+        id: tauri_build
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          npm run tauri build -- --verbose 2>&1 | Tee-Object -FilePath tauri-build-output.log
+          exit $LASTEXITCODE
+
+      - name: Publish build log to repo
+        if: always()
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          New-Item -ItemType Directory -Force -Path ci-logs | Out-Null
+          if (Test-Path tauri-build-output.log) { Copy-Item tauri-build-output.log ci-logs/latest-preview-build.log -Force }
+          "tauri build outcome: ${{ steps.tauri_build.outcome }}" | Out-File -FilePath ci-logs/latest-preview-summary.txt
+          git add ci-logs
+          git commit -m "ci: log do preview build [skip ci]" --allow-empty
+          git pull --rebase origin ${{ github.ref_name }}
+          git push origin HEAD:${{ github.ref_name }}
+
+      - name: Fail job if build failed
+        if: steps.tauri_build.outcome != 'success'
+        run: exit 1
+        shell: pwsh
+
+      - name: Create GitHub Release and upload MSI
+        if: steps.tauri_build.outcome == 'success'
+        shell: pwsh
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tagName: ${{ github.event.inputs.tag }}
-          releaseName: "DJ Set Timer — preview SQLite (${{ github.event.inputs.tag }})"
-          releaseBody: |
-            Build de teste da branch `feature/sqlite-realtime-source` — leitura em
-            tempo real do master.db do Rekordbox, com fallback automático pro XML.
-            Não é uma release estável; não mesclado na main ainda.
-          releaseDraft: false
-          prerelease: true
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $msi = Get-ChildItem -Path "src-tauri/target/release/bundle/msi" -Filter "*.msi" | Select-Object -First 1
+          gh release create "${{ github.event.inputs.tag }}" $msi.FullName `
+            --title "DJ Set Timer — preview SQLite (${{ github.event.inputs.tag }})" `
+            --notes "Build de teste da branch feature/sqlite-realtime-source. Nao mesclado na main ainda." `
+            --prerelease
