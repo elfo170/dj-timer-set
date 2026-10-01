@@ -1,2 +1,2 @@
-test outcome: success
-build outcome: success
+test outcome: failure
+build outcome: skipped
