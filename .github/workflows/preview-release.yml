@@ -45,39 +45,17 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
-      # Build manual (em vez do tauri-action) pra poder capturar e persistir
-      # o log real em caso de falha — o log do Actions redireciona pra blob
-      # storage inacessível fora do navegador/gh cli.
+      # Redirecionamento nativo (*>), não pipe pra um cmdlet — piping pra
+      # Tee-Object quebra a propagacao de $LASTEXITCODE no PowerShell, o que
+      # causou um falso-positivo de falha na tentativa anterior.
       - name: Build Tauri app (bundle MSI)
         id: tauri_build
-        continue-on-error: true
         shell: pwsh
         run: |
-          npm run tauri build -- --verbose 2>&1 | Tee-Object -FilePath tauri-build-output.log
-          exit $LASTEXITCODE
-
-      - name: Publish build log to repo
-        if: always()
-        continue-on-error: true
-        shell: pwsh
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          New-Item -ItemType Directory -Force -Path ci-logs | Out-Null
-          if (Test-Path tauri-build-output.log) { Copy-Item tauri-build-output.log ci-logs/latest-preview-build.log -Force }
-          "tauri build outcome: ${{ steps.tauri_build.outcome }}" | Out-File -FilePath ci-logs/latest-preview-summary.txt
-          git add ci-logs
-          git commit -m "ci: log do preview build [skip ci]" --allow-empty
-          git pull --rebase origin ${{ github.ref_name }}
-          git push origin HEAD:${{ github.ref_name }}
-
-      - name: Fail job if build failed
-        if: steps.tauri_build.outcome != 'success'
-        run: exit 1
-        shell: pwsh
+          npm run tauri build -- --verbose *> tauri-build-output.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Create GitHub Release and upload MSI
-        if: always() && steps.tauri_build.outcome == 'success'
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -87,3 +65,20 @@ jobs:
             --title "DJ Set Timer — preview SQLite (${{ github.event.inputs.tag }})" `
             --notes "Build de teste da branch feature/sqlite-realtime-source. Nao mesclado na main ainda." `
             --prerelease
+
+      # Só roda (e só falha o job por causa dela, nunca por si só) se o build
+      # tiver falhado — guarda o log real num arquivo com nome exclusivo pra
+      # não colidir com os logs do build-check.yml, que roda em paralelo.
+      - name: Publish failure log to repo
+        if: failure()
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          New-Item -ItemType Directory -Force -Path ci-logs | Out-Null
+          if (Test-Path tauri-build-output.log) { Copy-Item tauri-build-output.log ci-logs/preview-build-failure.log -Force }
+          git add ci-logs
+          git commit -m "ci: log de falha do preview build [skip ci]" --allow-empty
+          git pull --rebase origin ${{ github.ref_name }}
+          git push origin HEAD:${{ github.ref_name }}
