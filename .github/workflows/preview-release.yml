@@ -58,6 +58,7 @@ jobs:
 
       - name: Publish build log to repo
         if: always()
+        continue-on-error: true
         shell: pwsh
         run: |
           git config user.name "github-actions[bot]"
@@ -76,7 +77,7 @@ jobs:
         shell: pwsh
 
       - name: Create GitHub Release and upload MSI
-        if: steps.tauri_build.outcome == 'success'
+        if: always() && steps.tauri_build.outcome == 'success'
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
