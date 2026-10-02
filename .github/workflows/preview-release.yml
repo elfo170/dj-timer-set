@@ -66,19 +66,22 @@ jobs:
             --notes "Build de teste da branch feature/sqlite-realtime-source. Nao mesclado na main ainda." `
             --prerelease
 
-      # Só roda (e só falha o job por causa dela, nunca por si só) se o build
-      # tiver falhado — guarda o log real num arquivo com nome exclusivo pra
-      # não colidir com os logs do build-check.yml, que roda em paralelo.
+      # Só roda se o build tiver falhado. Usa a Contents API direto (gh api),
+      # não git commit/push — isso rodava em paralelo com o build-check.yml
+      # (mesma branch, mesma pasta ci-logs/) e um pull --rebase concorrente
+      # perdia o arquivo. PUT direto com nome único por run_id não tem essa
+      # corrida: é uma escrita atômica num caminho que nenhum outro workflow usa.
       - name: Publish failure log to repo
         if: failure()
         continue-on-error: true
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          New-Item -ItemType Directory -Force -Path ci-logs | Out-Null
-          if (Test-Path tauri-build-output.log) { Copy-Item tauri-build-output.log ci-logs/preview-build-failure.log -Force }
-          git add ci-logs
-          git commit -m "ci: log de falha do preview build [skip ci]" --allow-empty
-          git pull --rebase origin ${{ github.ref_name }}
-          git push origin HEAD:${{ github.ref_name }}
+          if (Test-Path tauri-build-output.log) {
+            $content = [Convert]::ToBase64String([System.IO.File]::ReadAllBytes("tauri-build-output.log"))
+            $path = "ci-logs/preview-failure-${{ github.run_id }}.log"
+            $json = @{ message = "ci: log de falha $path [skip ci]"; content = $content; branch = "${{ github.ref_name }}" } | ConvertTo-Json
+            $json | Out-File -FilePath body.json -Encoding utf8
+            gh api --method PUT "repos/${{ github.repository }}/contents/$path" --input body.json
+          }
