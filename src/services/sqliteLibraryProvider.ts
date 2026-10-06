@@ -22,7 +22,7 @@ function classify(raw: string): SqliteReadError {
   if (raw === "DB_NOT_FOUND") {
     return new SqliteReadError(
       "DB_NOT_FOUND",
-      "O master.db do Rekordbox não foi encontrado na mesma pasta do rekordbox.xml.",
+      "O master.db do Rekordbox não foi encontrado no caminho esperado (AppData\\Roaming\\Pioneer\\rekordbox).",
     );
   }
   if (raw === "DECRYPT_FAILED") {
