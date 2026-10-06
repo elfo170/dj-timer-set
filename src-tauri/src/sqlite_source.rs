@@ -17,6 +17,15 @@
 //!    a chave não varia por máquina/licença — mas é POSSÍVEL que a Pioneer tenha
 //!    trocado a chave em alguma atualização da série 7.x. Se `read_rekordbox_sqlite`
 //!    retornar o erro "DECRYPT_FAILED", é esse o suspeito nº 1.
+//!
+//!    CORRIGIDO (achado na fonte primária, depois de uma falha real): tanto o
+//!    projeto original do liamcottle quanto o código do pyrekordbox usam
+//!    `PRAGMA key = '<chave>'` — a chave hex é uma SENHA que o SQLCipher
+//!    deriva via PBKDF2, não bytes crus via `x'...'`. A versão anterior deste
+//!    arquivo assumia modo raw key pra qualquer chave de 64 hex chars, o que
+//!    nunca teria decodificado nada com a chave padrão. `open_and_verify`
+//!    agora tenta modo senha primeiro e modo raw key como segunda tentativa.
+//!    Se MESMO ASSIM falhar, aí sim o suspeito é o valor da chave em si.
 //!    Contorno manual: usar a função save_sqlcipher_key com uma chave obtida via
 //!    ferramentas de terceiros (ex.: CLI do pyrekordbox, RekordLocksmith).
 //!
@@ -186,26 +195,45 @@ impl DbOpenError {
 /// Abre o master.db em modo somente-leitura, define a chave e confirma que a
 /// decodificação funcionou de fato (PRAGMA key nunca falha sozinho — o erro só
 /// aparece na primeira leitura real, então fazemos essa leitura aqui).
+///
+/// IMPORTANTE (corrigido após achar a fonte primária): tanto a documentação
+/// do liamcottle (projeto original que extraiu a chave via Frida) quanto o
+/// código-fonte do pyrekordbox usam `PRAGMA key = '<chave>'` — a chave hex é
+/// tratada como SENHA (o SQLCipher deriva a chave real via PBKDF2), não como
+/// bytes crus via `x'...'`. A versão anterior deste arquivo assumia modo raw
+/// key pra chaves de 64 hex chars, o que nunca teria funcionado com a chave
+/// padrão. Agora tentamos os dois modos, nessa ordem, e usamos o primeiro que
+/// decodificar — cobre tanto esse caso quanto uma eventual chave raw real.
 fn open_and_verify(path: &PathBuf, key: &str) -> Result<Connection, DbOpenError> {
-    let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
-        .map_err(DbOpenError::Sqlite)?;
+    let looks_like_hex32 = key.len() == 64 && key.chars().all(|c| c.is_ascii_hexdigit());
 
-    let is_raw_key = key.len() == 64 && key.chars().all(|c| c.is_ascii_hexdigit());
-    let pragma = if is_raw_key {
-        format!("PRAGMA key = \"x'{key}'\";")
-    } else {
-        // Fallback: trata como senha e deixa o SQLCipher derivar a chave via KDF.
-        format!("PRAGMA key = '{}';", key.replace('\'', "''"))
-    };
-    conn.execute_batch(&pragma).map_err(DbOpenError::Sqlite)?;
-
-    // Primeira leitura real: é aqui que uma chave errada se manifesta.
-    match conn.query_row("SELECT count(*) FROM sqlite_master", [], |row| {
-        row.get::<_, i64>(0)
-    }) {
-        Ok(_) => Ok(conn),
-        Err(_) => Err(DbOpenError::DecryptFailed),
+    let mut attempts: Vec<String> = vec![format!("PRAGMA key = '{}';", key.replace('\'', "''"))];
+    if looks_like_hex32 {
+        attempts.push(format!("PRAGMA key = \"x'{key}'\";"));
     }
+
+    let mut last_sqlite_err: Option<rusqlite::Error> = None;
+
+    for pragma in attempts {
+        let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(DbOpenError::Sqlite)?;
+
+        if let Err(e) = conn.execute_batch(&pragma) {
+            last_sqlite_err = Some(e);
+            continue;
+        }
+
+        // Primeira leitura real: é aqui que uma chave errada se manifesta.
+        match conn.query_row("SELECT count(*) FROM sqlite_master", [], |row| {
+            row.get::<_, i64>(0)
+        }) {
+            Ok(_) => return Ok(conn),
+            Err(e) => last_sqlite_err = Some(e),
+        }
+    }
+
+    let _ = last_sqlite_err; // guardado só pra depuração futura, se necessário
+    Err(DbOpenError::DecryptFailed)
 }
 
 fn value_to_opt_string(v: SqlValue) -> Option<String> {
