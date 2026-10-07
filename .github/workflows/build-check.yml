@@ -1,0 +1,103 @@
+name: Build Check (branch)
+
+on:
+  push:
+    branches:
+      - "feature/**"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  check-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      # bundled-sqlcipher (sem vendored-openssl, que é instável no Windows —
+      # ver comentário no Cargo.toml) precisa de um OpenSSL do sistema para
+      # linkar contra. windows-latest já vem com vcpkg pré-instalado — é mais
+      # confiável que choco (link estático, sem depender de DLL da OpenSSL no
+      # executável final).
+      - name: Install OpenSSL via vcpkg
+        shell: pwsh
+        run: |
+          vcpkg install openssl:x64-windows-static-md
+          $installed = "$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows-static-md"
+          if (-not (Test-Path "$installed\include\openssl\ssl.h")) {
+            Write-Error "Cabecalhos da OpenSSL nao encontrados em $installed\include"
+            Get-ChildItem "$env:VCPKG_INSTALLATION_ROOT\installed" -Recurse -Depth 2 | Select-Object FullName
+            exit 1
+          }
+          echo "OPENSSL_DIR=$installed" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          echo "OPENSSL_INCLUDE_DIR=$installed\include" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          echo "OPENSSL_LIB_DIR=$installed\lib" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          echo "OPENSSL_STATIC=1" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Frontend build (tsc + vite)
+        run: npm run build
+
+      # Roda os testes Rust de verdade num Windows real — incluindo o teste
+      # de ponta a ponta que cria um master.db sintético cifrado com
+      # SQLCipher e valida a leitura completa (chave, joins, árvore de
+      # playlists). Saída sempre capturada em arquivo (ver step de log
+      # abaixo) porque os logs do Actions redirecionam pra blob storage,
+      # inacessível fora do navegador/gh cli.
+      - name: Rust tests
+        id: rust_tests
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          cargo test --manifest-path src-tauri/Cargo.toml --verbose 2>&1 | Tee-Object -FilePath rust-test-output.log
+          exit $LASTEXITCODE
+
+      - name: Rust build
+        id: rust_build
+        if: steps.rust_tests.outcome == 'success'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          cargo build --manifest-path src-tauri/Cargo.toml --verbose 2>&1 | Tee-Object -FilePath rust-build-output.log
+          exit $LASTEXITCODE
+
+      # Commita os logs de volta no repo (sempre, sucesso ou falha) pra
+      # serem lidos via a Contents API — sem isso, só dá pra ver no navegador.
+      - name: Publish logs to repo
+        if: always()
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          New-Item -ItemType Directory -Force -Path ci-logs | Out-Null
+          "test outcome: ${{ steps.rust_tests.outcome }}" | Out-File -FilePath ci-logs/latest-summary.txt
+          "build outcome: ${{ steps.rust_build.outcome }}" | Out-File -FilePath ci-logs/latest-summary.txt -Append
+          if (Test-Path rust-test-output.log) { Copy-Item rust-test-output.log ci-logs/latest-test.log -Force }
+          if (Test-Path rust-build-output.log) { Copy-Item rust-build-output.log ci-logs/latest-build.log -Force }
+          git add ci-logs
+          git commit -m "ci: log da última execução [skip ci]" --allow-empty
+          git pull --rebase origin ${{ github.ref_name }}
+          git push origin HEAD:${{ github.ref_name }}
+
+      - name: Fail job if Rust steps failed
+        if: steps.rust_tests.outcome != 'success' || steps.rust_build.outcome != 'success'
+        run: exit 1
+        shell: pwsh

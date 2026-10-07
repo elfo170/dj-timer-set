@@ -15,6 +15,10 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# bundled-sqlcipher: compila o SQLCipher a partir do fonte e linka estaticamente.
+# Não usamos "vendored-openssl" pois é conhecido por ser instável no Windows;
+# em vez disso, o workflow de CI instala o OpenSSL via choco e aponta OPENSSL_DIR.
+rusqlite = { version = "0.32", features = ["bundled-sqlcipher"] }
 
 [profile.release]
 strip = true
