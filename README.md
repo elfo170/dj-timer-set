@@ -6,9 +6,9 @@ Aplicação desktop em Tauri (Rust + React/Frontend) para gerenciamento de tempo
 
 ## Status Atual do Projeto
 
-- Leitura do Banco de Dados Real: A leitura do banco de dados real já está ativa e integrada ao sistema.
-- Exportação de XML (Fallback Temporário): 
-  > Nota Importante: O fallback para exportação/leitura de arquivos XML no momento está configurado com um caminho hardcoded apontando para a máquina do desenvolvedor. A seleção dinâmica de caminho e tratamento definitivo deste fallback serão ajustados na versão v1.0.
+- Leitura do Banco de Dados Real: ativa. Ao abrir, o app tenta ler o `master.db` do Rekordbox no caminho padrão (`%APPDATA%\Pioneer\rekordbox\master.db`).
+- Seleção manual de fonte: se o `master.db` não for encontrado ou não puder ser aberto, o app oferece (1) selecionar o `master.db` manualmente ou (2) selecionar um XML exportado do Rekordbox. A última fonte escolhida manualmente é lembrada para as próximas aberturas.
+- Nenhum caminho é fixo no app: tudo é resolvido a partir de `%APPDATA%` ou escolhido pelo usuário.
 
 ---
 
