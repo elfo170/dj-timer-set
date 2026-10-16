@@ -29,7 +29,7 @@
 //!    Contorno manual: usar a função save_sqlcipher_key com uma chave obtida via
 //!    ferramentas de terceiros (ex.: CLI do pyrekordbox, RekordLocksmith).
 //!
-//! 2. MAPEAMENTO Kind → Hot Cue A/B (ver `HOT_CUE_A_KIND` / `HOT_CUE_B_KIND`)
+//! 2. MAPEAMENTO Kind → Hot Cue (ver `FIRST_HOT_CUE_KIND` / `LAST_HOT_CUE_KIND`)
 //!    A tabela djmdCue guarda `Kind = 0` para memory cue e "o número do hot cue"
 //!    para os demais, sem a documentação especificar se a numeração começa em
 //!    0 ou 1. Assumimos Kind=1 → Hot Cue A e Kind=2 → Hot Cue B (analogia com o
@@ -37,6 +37,8 @@
 //!    parece haver um deslocamento de +1). Validar comparando os tempos exibidos
 //!    no app (fonte = banco) com os mesmos exibidos com a fonte = XML para a
 //!    mesma playlist.
+//!    VALIDADO em máquina real: Kind=1 → A e Kind=2 → B. Kind=3.. → C.. segue o
+//!    mesmo padrão, mas é INFERIDO (ainda não conferido contra um master.db real).
 //!
 //! 3. ESCALA DO BPM (`bpm_raw / 100.0` em `track_from_row`)
 //!    A documentação da tabela djmdContent não confirma a unidade da coluna BPM.
@@ -58,7 +60,7 @@
 
 use rusqlite::{types::Value as SqlValue, Connection, OpenFlags};
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 
 use crate::rekordbox_paths::default_master_db_path;
@@ -73,8 +75,18 @@ const DEFAULT_KEY_HEX: &str =
     "402fd482c38817c35ffa8ffb8c7d93143b749e7d315df7a81732a1ff43608497";
 
 /// Ver nota (2) no cabeçalho do arquivo.
-const HOT_CUE_A_KIND: i64 = 1;
-const HOT_CUE_B_KIND: i64 = 2;
+/// Kind=1 → Hot Cue A (índice 0), Kind=2 → B (índice 1), e assim por diante.
+const FIRST_HOT_CUE_KIND: i64 = 1;
+/// Limite defensivo (A–P): valores acima disso não são tratados como hot cue.
+const LAST_HOT_CUE_KIND: i64 = 16;
+
+/// Hot cue de uma faixa: `index` 0 = A, 1 = B, 2 = C…
+#[derive(Serialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct HotCueDto {
+    pub index: u32,
+    pub seconds: f64,
+}
 
 #[derive(Serialize, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -85,8 +97,8 @@ pub struct SqliteTrackDto {
     pub bpm: Option<f64>,
     pub key: Option<String>,
     pub total_time_seconds: f64,
-    pub hot_cue_a_seconds: Option<f64>,
-    pub hot_cue_b_seconds: Option<f64>,
+    /// Ordenados por índice (A, B, C…); memory cues ficam de fora.
+    pub hot_cues: Vec<HotCueDto>,
 }
 
 #[derive(Serialize, Debug)]
@@ -266,16 +278,17 @@ fn value_to_opt_f64(v: SqlValue) -> Option<f64> {
     }
 }
 
-/// Cues de uma faixa: (segundos do Hot Cue A, segundos do Hot Cue B).
-type CueMap = HashMap<String, (Option<f64>, Option<f64>)>;
+/// Hot cues por faixa, já ordenados por índice.
+type CueMap = HashMap<String, Vec<HotCueDto>>;
 
 fn read_cues(conn: &Connection) -> rusqlite::Result<CueMap> {
     let mut stmt = conn.prepare(
-        "SELECT ContentID, Kind, InMsec FROM djmdCue WHERE Kind IN (?1, ?2)",
+        "SELECT ContentID, Kind, InMsec FROM djmdCue WHERE Kind BETWEEN ?1 AND ?2",
     )?;
-    let mut map: CueMap = HashMap::new();
+    // Por faixa: índice do hot cue -> segundos (duplicata: vale a última linha lida).
+    let mut by_track: HashMap<String, BTreeMap<u32, f64>> = HashMap::new();
 
-    let rows = stmt.query_map([HOT_CUE_A_KIND, HOT_CUE_B_KIND], |row| {
+    let rows = stmt.query_map([FIRST_HOT_CUE_KIND, LAST_HOT_CUE_KIND], |row| {
         let content_id: SqlValue = row.get(0)?;
         let kind: i64 = row.get(1)?;
         let in_msec: SqlValue = row.get(2)?;
@@ -284,16 +297,27 @@ fn read_cues(conn: &Connection) -> rusqlite::Result<CueMap> {
 
     for row in rows {
         let (content_id, kind, in_msec) = row?;
-        let seconds = in_msec.map(|ms| ms / 1000.0);
-        let entry = map.entry(content_id).or_insert((None, None));
-        if kind == HOT_CUE_A_KIND {
-            entry.0 = seconds;
-        } else if kind == HOT_CUE_B_KIND {
-            entry.1 = seconds;
+        let Some(ms) = in_msec else { continue };
+        if ms < 0.0 {
+            continue;
         }
+        let index = (kind - FIRST_HOT_CUE_KIND) as u32;
+        by_track
+            .entry(content_id)
+            .or_default()
+            .insert(index, ms / 1000.0);
     }
 
-    Ok(map)
+    Ok(by_track
+        .into_iter()
+        .map(|(content_id, cues)| {
+            let sorted = cues
+                .into_iter()
+                .map(|(index, seconds)| HotCueDto { index, seconds })
+                .collect();
+            (content_id, sorted)
+        })
+        .collect())
 }
 
 fn read_tracks(conn: &Connection) -> rusqlite::Result<Vec<SqliteTrackDto>> {
@@ -326,8 +350,7 @@ fn read_tracks(conn: &Connection) -> rusqlite::Result<Vec<SqliteTrackDto>> {
     let mut tracks = Vec::new();
     for row in rows {
         let (id, title, artist, bpm_raw, key, total_time_seconds) = row?;
-        let (hot_cue_a_seconds, hot_cue_b_seconds) =
-            cues.get(&id).copied().unwrap_or((None, None));
+        let hot_cues = cues.get(&id).cloned().unwrap_or_default();
 
         tracks.push(SqliteTrackDto {
             id,
@@ -336,8 +359,7 @@ fn read_tracks(conn: &Connection) -> rusqlite::Result<Vec<SqliteTrackDto>> {
             bpm: bpm_raw.map(|raw| raw / 100.0), // ver nota (3) no cabeçalho
             key: key.filter(|s| !s.is_empty()),
             total_time_seconds,
-            hot_cue_a_seconds,
-            hot_cue_b_seconds,
+            hot_cues,
         });
     }
 
@@ -518,6 +540,7 @@ mod tests {
             INSERT INTO djmdCue VALUES ('t1', 1, 38000);   -- Hot Cue A aos 38s
             INSERT INTO djmdCue VALUES ('t1', 0, 5000);    -- memory cue, deve ser ignorado
             INSERT INTO djmdCue VALUES ('t2', 1, 30000);
+            INSERT INTO djmdCue VALUES ('t2', 3, 200000);  -- Hot Cue C, inserido antes do B de propósito
             INSERT INTO djmdCue VALUES ('t2', 2, 330000);
 
             INSERT INTO djmdPlaylist VALUES ('folder1', 1, 'Sets', 1, NULL);
@@ -533,6 +556,10 @@ mod tests {
 
         drop(conn);
         path
+    }
+
+    fn cues_of(track: &SqliteTrackDto) -> Vec<(u32, f64)> {
+        track.hot_cues.iter().map(|c| (c.index, c.seconds)).collect()
     }
 
     #[test]
@@ -559,20 +586,21 @@ mod tests {
         assert_eq!(t1.artist, "Artista A");
         assert_eq!(t1.bpm, Some(128.0), "BPM deveria ser dividido por 100");
         assert_eq!(t1.key.as_deref(), Some("8A"));
-        assert_eq!(t1.hot_cue_a_seconds, Some(38.0));
-        assert_eq!(t1.hot_cue_b_seconds, None);
+        assert_eq!(cues_of(t1), vec![(0, 38.0)], "memory cue (Kind=0) não é hot cue");
         // Replica o exemplo exato do briefing: 05:43 com HCA 00:38 e sem HCB -> 05:05
-        let effective = t1.total_time_seconds - t1.hot_cue_a_seconds.unwrap_or(0.0);
+        let effective = t1.total_time_seconds - 38.0;
         assert_eq!(effective, 305.0, "343 - 38 = 305s = 05:05, igual ao exemplo do briefing");
 
         let t2 = payload.tracks.iter().find(|t| t.id == "t2").unwrap();
-        assert_eq!(t2.hot_cue_a_seconds, Some(30.0));
-        assert_eq!(t2.hot_cue_b_seconds, Some(330.0));
+        assert_eq!(
+            cues_of(t2),
+            vec![(0, 30.0), (1, 330.0), (2, 200.0)],
+            "todos os hot cues (A, B, C…), ordenados por índice"
+        );
 
         let t3 = payload.tracks.iter().find(|t| t.id == "t3").unwrap();
         assert_eq!(t3.artist, "", "artista nulo vira string vazia, não erro");
-        assert_eq!(t3.hot_cue_a_seconds, None);
-        assert_eq!(t3.hot_cue_b_seconds, None);
+        assert!(t3.hot_cues.is_empty());
     }
 
     #[test]

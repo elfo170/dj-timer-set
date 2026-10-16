@@ -6,8 +6,7 @@ export interface SqliteTrackPayload {
   bpm: number | null;
   key: string | null;
   totalTimeSeconds: number;
-  hotCueASeconds: number | null;
-  hotCueBSeconds: number | null;
+  hotCues: { index: number; seconds: number }[];
 }
 
 export interface SqlitePlaylistPayload {

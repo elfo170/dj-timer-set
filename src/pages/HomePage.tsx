@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { PlaylistSidebar } from "@/components/PlaylistSidebar";
 import { TrackTable } from "@/components/TrackTable";
 import { SourceBar } from "@/components/SourceBar";
+import { CueSettingsBar } from "@/components/CueSettingsBar";
 import { SourcePicker } from "@/components/SourcePicker";
 import {
   GOAL_OPTIONS_MINUTES,
@@ -11,6 +12,8 @@ import {
   type GoalMinutes,
 } from "@/components/SetSummaryPanel";
 import { useLibrary } from "@/hooks/useLibrary";
+import { useCueSettings } from "@/hooks/useCueSettings";
+import { collectHotCueIndexes, isDefaultGlobal } from "@/utils/cues";
 import { buildSetRows, summarizeSet } from "@/utils/setMath";
 
 const DEFAULT_GOAL: GoalMinutes = GOAL_OPTIONS_MINUTES[2]; // 60 min
@@ -47,10 +50,30 @@ export function HomePage() {
     [library, selectedPlaylistId],
   );
 
+  const { settings, setGlobalCue, setTrackCue, resetPlaylist } =
+    useCueSettings(selectedPlaylist);
+
   const rows = useMemo(
     () =>
-      library && selectedPlaylist ? buildSetRows(selectedPlaylist, library) : [],
-    [library, selectedPlaylist],
+      library && selectedPlaylist
+        ? buildSetRows(selectedPlaylist, library, settings)
+        : [],
+    [library, selectedPlaylist, settings],
+  );
+
+  const availableCueIndexes = useMemo(
+    () => collectHotCueIndexes(rows.map((row) => row.track)),
+    [rows],
+  );
+
+  const customizedTrackCount = useMemo(
+    () =>
+      new Set(
+        rows
+          .filter((row) => row.startOverridden || row.endOverridden)
+          .map((row) => row.track.id),
+      ).size,
+    [rows],
   );
 
   const summary = useMemo(() => summarizeSet(rows), [rows]);
@@ -117,7 +140,19 @@ export function HomePage() {
 
         {selectedPlaylist ? (
           <>
-            <TrackTable rows={rows} />
+            <CueSettingsBar
+              settings={settings}
+              availableIndexes={availableCueIndexes}
+              customizedTrackCount={customizedTrackCount}
+              canReset={!isDefaultGlobal(settings) || customizedTrackCount > 0}
+              onChange={setGlobalCue}
+              onReset={resetPlaylist}
+            />
+            <TrackTable
+              rows={rows}
+              settings={settings}
+              onChangeTrackCue={setTrackCue}
+            />
             <SetSummaryPanel
               summary={summary}
               goalMinutes={goalMinutes}

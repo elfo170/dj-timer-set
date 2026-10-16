@@ -59,3 +59,22 @@ Os instaladores oficiais para Windows (.msi) são gerados automaticamente via Gi
 Você pode baixar a versão mais recente em Releases (https://github.com/elfo170/dj-timer-set/releases).
 
 ---
+
+## Pontos de início e fim do cálculo (v0.3.0)
+
+Por padrão o tempo de cada faixa é **Hot Cue B − Hot Cue A** (sem A → 00:00; sem B → fim da faixa).
+Agora isso é configurável:
+
+- **Na playlist inteira:** a barra "Pontos do cálculo (playlist)" tem um seletor de **Início** e outro de **Fim**
+  (início da faixa, qualquer Hot Cue A–H…, fim da faixa). Vale para todas as faixas da playlist.
+- **Por faixa:** cada linha da tabela tem seus próprios seletores de Início e Fim. A opção
+  "Padrão (…)" volta a faixa a seguir a playlist; qualquer outra escolha vira uma exceção (destacada em cor).
+- **Hot cue ausente:** se a faixa não tem o hot cue escolhido, o início cai em 00:00 e o fim na duração
+  total (tempo em itálico, com dica ao passar o mouse). Fim antes do início → tempo 00:00, destacado em vermelho.
+- **"Restaurar padrão"** volta a playlist para A → B e remove todas as exceções.
+- As escolhas são **salvas por playlist** (caminho de pastas + nome) e sobrevivem a fechar o app, a "Recarregar"
+  e à troca de fonte (master.db ↔ XML). Exceções por faixa são indexadas pelo id da faixa.
+
+Hot cues C em diante no `master.db` são lidos por inferência (Kind=3 → C…), seguindo o padrão de A/B (já
+validado em máquina real); vale conferir contra o XML se usar muitos hot cues.
+
