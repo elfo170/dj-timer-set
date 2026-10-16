@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
-import { FileWarning, ListMusic, LoaderCircle, RefreshCw } from "lucide-react";
+import { ListMusic, LoaderCircle, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { PlaylistSidebar } from "@/components/PlaylistSidebar";
 import { TrackTable } from "@/components/TrackTable";
 import { SourceBar } from "@/components/SourceBar";
+import { SourcePicker } from "@/components/SourcePicker";
 import {
   GOAL_OPTIONS_MINUTES,
   SetSummaryPanel,
@@ -19,12 +20,14 @@ export function HomePage() {
     status,
     library,
     source,
-    errorMessage,
-    sqliteFallbackReason,
-    reload,
-    switchSource,
-    retryWithKey,
+    failure,
     loadedAt,
+    busy,
+    reload,
+    pickSqlite,
+    pickXml,
+    retryWithKey,
+    dismissFailure,
   } = useLibrary();
   const [selectedPlaylistId, setSelectedPlaylistId] = useState<string | null>(null);
   const [goalMinutes, setGoalMinutes] = useState<GoalMinutes>(DEFAULT_GOAL);
@@ -61,20 +64,17 @@ export function HomePage() {
     );
   }
 
-  if (status === "not-found" || status === "error") {
+  if (status === "needs-source" || !source) {
     return (
       <CenteredState>
-        <FileWarning className="h-10 w-10 text-alert" aria-hidden />
-        <h2 className="text-base font-semibold text-ink">
-          {status === "not-found"
-            ? "Biblioteca do Rekordbox não encontrada"
-            : "Não foi possível ler a biblioteca"}
-        </h2>
-        <p className="max-w-md text-center text-sm text-ink-muted">{errorMessage}</p>
-        <Button onClick={reload}>
-          <RefreshCw className="h-4 w-4" aria-hidden />
-          Tentar novamente
-        </Button>
+        <SourcePicker
+          failure={failure}
+          busy={busy}
+          onPickSqlite={() => void pickSqlite()}
+          onPickXml={() => void pickXml()}
+          onRetryDefault={reload}
+          onRetryWithKey={retryWithKey}
+        />
       </CenteredState>
     );
   }
@@ -90,9 +90,12 @@ export function HomePage() {
       <main className="flex min-w-0 flex-1 flex-col">
         <SourceBar
           source={source}
-          sqliteFallbackReason={sqliteFallbackReason}
-          onSwitchSource={switchSource}
+          failure={failure}
+          busy={busy}
+          onPickSqlite={() => void pickSqlite()}
+          onPickXml={() => void pickXml()}
           onRetryWithKey={retryWithKey}
+          onDismissFailure={dismissFailure}
         />
 
         <header className="flex items-center justify-between gap-4 border-b border-line px-5 py-3">
@@ -106,7 +109,7 @@ export function HomePage() {
               </p>
             )}
           </div>
-          <Button variant="outline" size="sm" onClick={reload}>
+          <Button variant="outline" size="sm" onClick={reload} disabled={busy}>
             <RefreshCw className="h-4 w-4" aria-hidden />
             Recarregar
           </Button>

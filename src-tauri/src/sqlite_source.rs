@@ -61,13 +61,14 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use crate::rekordbox_paths::master_db_path;
+use crate::rekordbox_paths::default_master_db_path;
 
 /// Ver nota (1) no cabeçalho do arquivo.
 /// Fonte: extração pública via Frida em versões pré-6.6.5 do Rekordbox 6
 /// (https://github.com/liamcottle/pioneer-rekordbox-database-encryption).
-/// Chave RAW (32 bytes em hex), não uma senha — por isso é aplicada com a
-/// sintaxe `PRAGMA key = "x'...'"` em vez de `PRAGMA key = '...'`.
+/// Aplicada como SENHA (`PRAGMA key = '...'`), como fazem o projeto original e
+/// o pyrekordbox; `open_and_verify` tenta o modo raw key (`x'...'`) só como
+/// segunda tentativa.
 const DEFAULT_KEY_HEX: &str =
     "402fd482c38817c35ffa8ffb8c7d93143b749e7d315df7a81732a1ff43608497";
 
@@ -106,14 +107,21 @@ pub struct SqliteLibraryPayload {
 
 /// Lê a biblioteca diretamente do master.db (sem exportar XML).
 ///
+/// `db_path`, se informado, é o master.db escolhido pelo usuário; sem ele usa
+/// o caminho padrão (%APPDATA%\Pioneer\rekordbox\master.db).
+///
 /// `key_override`, se informado, tem prioridade sobre a chave salva e sobre a
 /// chave padrão — é o que a UI usa quando o usuário cola uma chave manual.
 #[tauri::command]
 pub fn read_rekordbox_sqlite(
     app: tauri::AppHandle,
+    db_path: Option<String>,
     key_override: Option<String>,
 ) -> Result<SqliteLibraryPayload, String> {
-    let db_path = master_db_path();
+    let db_path = match db_path.filter(|p| !p.trim().is_empty()) {
+        Some(p) => PathBuf::from(p),
+        None => default_master_db_path().ok_or_else(|| "DB_NOT_FOUND".to_string())?,
+    };
 
     let key = key_override
         .filter(|k| !k.trim().is_empty())

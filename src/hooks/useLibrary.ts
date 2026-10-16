@@ -1,101 +1,112 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  createLibraryProvider,
-  LibraryNotFoundError,
-} from "@/services/libraryService";
+import { LibraryNotFoundError, XmlLibraryProvider } from "@/services/libraryService";
+import { pickMasterDbPath, pickXmlPath } from "@/services/filePicker";
+import { readSavedSource, writeSavedSource } from "@/services/savedSource";
 import {
   SqliteLibraryProvider,
   SqliteReadError,
   saveSqlcipherKey,
 } from "@/services/sqliteLibraryProvider";
+import type { LibrarySource, SourceFailure } from "@/types/librarySource";
 import type { RekordboxLibrary } from "@/types/rekordbox";
 
-export type LibraryStatus = "loading" | "ready" | "not-found" | "error";
-export type LibrarySource = "sqlite" | "xml";
+/**
+ * - loading: tentando abrir uma fonte automaticamente
+ * - ready: biblioteca carregada (`source` diz de onde)
+ * - needs-source: nenhuma fonte automática funcionou; a UI pede ao usuário
+ *   para escolher o master.db ou um XML
+ */
+export type LibraryStatus = "loading" | "ready" | "needs-source";
 
 export interface UseLibraryResult {
   status: LibraryStatus;
   library: RekordboxLibrary | null;
-  /** Fonte que efetivamente produziu os dados exibidos agora. */
-  source: LibrarySource;
-  /** Mensagem de erro da fonte ATIVA (mostrada nos estados not-found/error). */
-  errorMessage: string | null;
-  /**
-   * Preenchido quando o SQLite falhou e o app caiu para o XML automaticamente
-   * — a UI mostra um aviso mesmo com status "ready", já que os dados exibidos
-   * não são "tempo real" como o usuário esperaria por padrão.
-   */
-  sqliteFallbackReason: SqliteReadError | null;
-  reload: () => void;
-  /** Troca manual de fonte (para comparar SQLite vs XML lado a lado). */
-  switchSource: (source: LibrarySource) => void;
-  /** Tenta o SQLite de novo com uma chave informada manualmente; salva se der certo. */
-  retryWithKey: (key: string) => Promise<boolean>;
+  /** Fonte que produziu os dados exibidos (null enquanto nada foi carregado). */
+  source: LibrarySource | null;
+  /** Motivo da última tentativa que falhou (null se a última deu certo). */
+  failure: SourceFailure | null;
   loadedAt: Date | null;
+  /** true enquanto uma leitura está em andamento (desabilita os botões). */
+  busy: boolean;
+  /** Relê a fonte atual; sem fonte ativa, refaz a abertura automática. */
+  reload: () => void;
+  /** Abre o seletor de arquivo para escolher o master.db manualmente. */
+  pickSqlite: () => Promise<void>;
+  /** Abre o seletor de arquivo para escolher um XML manualmente. */
+  pickXml: () => Promise<void>;
+  /** Tenta o último master.db de novo com uma chave informada; salva se der certo. */
+  retryWithKey: (key: string) => Promise<boolean>;
+  dismissFailure: () => void;
+}
+
+function toFailure(error: unknown): SourceFailure {
+  if (error instanceof SqliteReadError) {
+    return { code: error.code, message: error.message };
+  }
+  if (error instanceof LibraryNotFoundError) {
+    return { code: "XML_NOT_FOUND", message: error.message };
+  }
+  return {
+    code: "UNKNOWN",
+    message: error instanceof Error ? error.message : String(error),
+  };
 }
 
 export function useLibrary(): UseLibraryResult {
   const [status, setStatus] = useState<LibraryStatus>("loading");
   const [library, setLibrary] = useState<RekordboxLibrary | null>(null);
-  const [source, setSource] = useState<LibrarySource>("sqlite");
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [sqliteFallbackReason, setSqliteFallbackReason] =
-    useState<SqliteReadError | null>(null);
+  const [source, setSource] = useState<LibrarySource | null>(null);
+  const [failure, setFailure] = useState<SourceFailure | null>(null);
   const [loadedAt, setLoadedAt] = useState<Date | null>(null);
+  const [busy, setBusy] = useState(false);
 
-  // Evita que uma resposta atrasada de uma leitura anterior (ex.: trocou de
-  // fonte antes da primeira terminar) sobrescreva o estado mais recente.
+  // Evita que uma resposta atrasada de uma leitura anterior sobrescreva o
+  // estado mais recente.
   const requestIdRef = useRef(0);
+  // Qual master.db a última tentativa usou — é nele que "informar chave" age.
+  const lastSqlitePathRef = useRef<string | null>(null);
 
-  const loadXml = useCallback(async (): Promise<boolean> => {
-    const requestId = ++requestIdRef.current;
-    try {
-      const lib = await createLibraryProvider().loadLibrary();
-      if (requestId !== requestIdRef.current) return true;
-      setLibrary(lib);
-      setSource("xml");
-      setStatus("ready");
-      setErrorMessage(null);
-      setLoadedAt(new Date());
-      return true;
-    } catch (error) {
-      if (requestId !== requestIdRef.current) return false;
-      setSource("xml");
-      setStatus(error instanceof LibraryNotFoundError ? "not-found" : "error");
-      setErrorMessage(error instanceof Error ? error.message : String(error));
-      return false;
-    }
-  }, []);
-
-  const loadSqlite = useCallback(async (keyOverride?: string): Promise<boolean> => {
-    const requestId = ++requestIdRef.current;
-    try {
-      const lib = await new SqliteLibraryProvider(keyOverride).loadLibrary();
-      if (requestId !== requestIdRef.current) return true;
-      setLibrary(lib);
-      setSource("sqlite");
-      setStatus("ready");
-      setErrorMessage(null);
-      setSqliteFallbackReason(null);
-      setLoadedAt(new Date());
-      return true;
-    } catch (error) {
-      if (requestId !== requestIdRef.current) return false;
-      if (error instanceof SqliteReadError) {
-        setSqliteFallbackReason(error);
+  const tryLoad = useCallback(
+    async (target: LibrarySource, keyOverride?: string): Promise<boolean> => {
+      const requestId = ++requestIdRef.current;
+      if (target.kind === "sqlite") {
+        lastSqlitePathRef.current = target.path;
       }
-      return false;
-    }
-  }, []);
+      try {
+        const lib =
+          target.kind === "sqlite"
+            ? await new SqliteLibraryProvider(target.path, keyOverride).loadLibrary()
+            : await new XmlLibraryProvider(target.path).loadLibrary();
+        if (requestId !== requestIdRef.current) return true;
+        setLibrary(lib);
+        setSource(target);
+        setStatus("ready");
+        setFailure(null);
+        setLoadedAt(new Date());
+        return true;
+      } catch (error) {
+        if (requestId !== requestIdRef.current) return false;
+        setFailure(toFailure(error));
+        return false;
+      }
+    },
+    [],
+  );
 
+  // Ordem na abertura: 1) master.db no caminho padrão; 2) a última fonte que o
+  // usuário escolheu manualmente (se houver); 3) pedir ao usuário.
   const autoLoad = useCallback(async () => {
+    setBusy(true);
     setStatus("loading");
-    setErrorMessage(null);
-    const sqliteOk = await loadSqlite();
-    if (!sqliteOk) {
-      await loadXml();
+    setFailure(null);
+    let ok = await tryLoad({ kind: "sqlite", path: null });
+    if (!ok) {
+      const saved = readSavedSource();
+      if (saved) ok = await tryLoad(saved);
     }
-  }, [loadSqlite, loadXml]);
+    if (!ok) setStatus("needs-source");
+    setBusy(false);
+  }, [tryLoad]);
 
   useEffect(() => {
     void autoLoad();
@@ -103,55 +114,66 @@ export function useLibrary(): UseLibraryResult {
   }, []);
 
   const reload = useCallback(() => {
-    if (source === "sqlite") {
-      void loadSqlite().then((ok) => {
-        if (!ok) void loadXml();
-      });
-    } else {
-      void loadXml();
+    if (!source) {
+      void autoLoad();
+      return;
     }
-  }, [source, loadSqlite, loadXml]);
+    setBusy(true);
+    void tryLoad(source).finally(() => setBusy(false));
+  }, [source, autoLoad, tryLoad]);
 
-  const switchSource = useCallback(
-    (next: LibrarySource) => {
-      if (next === "sqlite") {
-        // Não muda `status`/`library` otimisticamente: se falhar, a tela
-        // continua mostrando os dados da fonte anterior (XML) em vez de
-        // sumir com a visão só porque o usuário testou o banco. O motivo
-        // do erro fica em `sqliteFallbackReason`, exibido pela SourceBar.
-        void loadSqlite();
-      } else {
-        void loadXml();
-      }
+  const pickAndLoad = useCallback(
+    async (kind: LibrarySource["kind"], pick: () => Promise<string | null>) => {
+      const path = await pick();
+      if (!path) return; // seletor cancelado
+      setBusy(true);
+      const target: LibrarySource = { kind, path };
+      const ok = await tryLoad(target);
+      if (ok) writeSavedSource(target);
+      setBusy(false);
     },
-    [loadSqlite, loadXml],
+    [tryLoad],
   );
+
+  const pickSqlite = useCallback(
+    () => pickAndLoad("sqlite", pickMasterDbPath),
+    [pickAndLoad],
+  );
+  const pickXml = useCallback(() => pickAndLoad("xml", pickXmlPath), [pickAndLoad]);
 
   const retryWithKey = useCallback(
     async (key: string): Promise<boolean> => {
-      const ok = await loadSqlite(key);
+      setBusy(true);
+      const path = lastSqlitePathRef.current;
+      const ok = await tryLoad({ kind: "sqlite", path }, key);
       if (ok) {
         try {
           await saveSqlcipherKey(key);
         } catch {
-          // Leitura já funcionou nesta sessão; falha ao salvar só significa
+          // A leitura já funcionou nesta sessão; falhar ao salvar só significa
           // que será preciso informar a chave de novo na próxima abertura.
         }
+        if (path) writeSavedSource({ kind: "sqlite", path });
       }
+      setBusy(false);
       return ok;
     },
-    [loadSqlite],
+    [tryLoad],
   );
+
+  const dismissFailure = useCallback(() => setFailure(null), []);
 
   return {
     status,
     library,
     source,
-    errorMessage,
-    sqliteFallbackReason,
-    reload,
-    switchSource,
-    retryWithKey,
+    failure,
     loadedAt,
+    busy,
+    reload,
+    pickSqlite,
+    pickXml,
+    retryWithKey,
+    dismissFailure,
   };
 }

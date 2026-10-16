@@ -1,142 +1,79 @@
-import { useState } from "react";
-import { Database, FileCode, KeyRound, TriangleAlert } from "lucide-react";
+import { Database, FileCode, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { cn } from "@/utils/cn";
-import type { LibrarySource } from "@/hooks/useLibrary";
-import type { SqliteReadError } from "@/services/sqliteLibraryProvider";
+import { KeyForm } from "@/components/KeyForm";
+import type { LibrarySource, SourceFailure } from "@/types/librarySource";
 
 interface SourceBarProps {
   source: LibrarySource;
-  sqliteFallbackReason: SqliteReadError | null;
-  onSwitchSource: (source: LibrarySource) => void;
+  failure: SourceFailure | null;
+  busy: boolean;
+  onPickSqlite: () => void;
+  onPickXml: () => void;
   onRetryWithKey: (key: string) => Promise<boolean>;
+  onDismissFailure: () => void;
 }
 
+function describe(source: LibrarySource): { label: string; detail: string } {
+  if (source.kind === "xml") {
+    return { label: "XML exportado", detail: source.path };
+  }
+  return {
+    label: "Banco (tempo real)",
+    detail: source.path ?? "caminho padrão (AppData)",
+  };
+}
+
+/** Barra com a fonte ativa e atalhos para trocar de master.db / XML. */
 export function SourceBar({
   source,
-  sqliteFallbackReason,
-  onSwitchSource,
+  failure,
+  busy,
+  onPickSqlite,
+  onPickXml,
   onRetryWithKey,
+  onDismissFailure,
 }: SourceBarProps) {
-  const [keyFormOpen, setKeyFormOpen] = useState(false);
-  const [keyInput, setKeyInput] = useState("");
-  const [submitting, setSubmitting] = useState(false);
-  const [attemptFailed, setAttemptFailed] = useState(false);
-
-  const handleSubmitKey = async () => {
-    if (!keyInput.trim()) return;
-    setSubmitting(true);
-    setAttemptFailed(false);
-    const ok = await onRetryWithKey(keyInput.trim());
-    setSubmitting(false);
-    if (ok) {
-      setKeyFormOpen(false);
-      setKeyInput("");
-    } else {
-      setAttemptFailed(true);
-    }
-  };
+  const { label, detail } = describe(source);
+  const Icon = source.kind === "sqlite" ? Database : FileCode;
 
   return (
     <div className="border-b border-line bg-surface-raised">
       <div className="flex items-center justify-between gap-3 px-5 py-2">
-        <div
-          className="flex items-center gap-1 rounded-md border border-line p-0.5"
-          role="group"
-          aria-label="Fonte dos dados"
-        >
-          <SourceButton
-            active={source === "sqlite"}
-            icon={<Database className="h-3.5 w-3.5" aria-hidden />}
-            label="Banco (tempo real)"
-            onClick={() => onSwitchSource("sqlite")}
-          />
-          <SourceButton
-            active={source === "xml"}
-            icon={<FileCode className="h-3.5 w-3.5" aria-hidden />}
-            label="XML exportado"
-            onClick={() => onSwitchSource("xml")}
-          />
+        <div className="flex min-w-0 items-center gap-2 text-xs">
+          <Icon className="h-3.5 w-3.5 shrink-0 text-wave" aria-hidden />
+          <span className="shrink-0 font-medium text-wave">{label}</span>
+          <span className="truncate text-ink-faint" title={detail}>
+            {detail}
+          </span>
         </div>
-
-        {source === "xml" && sqliteFallbackReason && (
-          <button
-            type="button"
-            onClick={() => setKeyFormOpen((v) => !v)}
-            className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-alert/90 hover:bg-alert/10"
-          >
-            <TriangleAlert className="h-3.5 w-3.5" aria-hidden />
-            Banco indisponível — usando XML
-          </button>
-        )}
+        <div className="flex shrink-0 items-center gap-2">
+          <Button variant="outline" size="sm" onClick={onPickSqlite} disabled={busy}>
+            Trocar master.db…
+          </Button>
+          <Button variant="outline" size="sm" onClick={onPickXml} disabled={busy}>
+            Usar XML…
+          </Button>
+        </div>
       </div>
 
-      {keyFormOpen && (
+      {failure && (
         <div className="border-t border-line px-5 py-3">
-          <p className="mb-2 text-xs text-ink-muted">
-            {sqliteFallbackReason?.message}{" "}
-            {sqliteFallbackReason?.code === "DECRYPT_FAILED" &&
-              "Se você tiver a chave SQLCipher correta para esta instalação, informe-a abaixo."}
-          </p>
-          <div className="flex items-center gap-2">
-            <div className="relative flex-1">
-              <KeyRound
-                className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-ink-faint"
-                aria-hidden
-              />
-              <Input
-                value={keyInput}
-                onChange={(e) => setKeyInput(e.target.value)}
-                placeholder="Chave SQLCipher (64 caracteres hex)"
-                className="pl-8 font-mono text-xs"
-                aria-label="Chave SQLCipher manual"
-              />
-            </div>
-            <Button
-              size="sm"
-              onClick={handleSubmitKey}
-              disabled={submitting || !keyInput.trim()}
+          <div className="mb-2 flex items-start justify-between gap-3">
+            <p className="text-xs text-alert">{failure.message}</p>
+            <button
+              type="button"
+              onClick={onDismissFailure}
+              aria-label="Dispensar aviso"
+              className="rounded p-0.5 text-ink-faint hover:text-ink"
             >
-              {submitting ? "Testando…" : "Usar esta chave"}
-            </Button>
+              <X className="h-3.5 w-3.5" aria-hidden />
+            </button>
           </div>
-          {attemptFailed && (
-            <p className="mt-2 text-xs text-alert">
-              Essa chave também não decodificou o master.db.
-            </p>
+          {failure.code === "DECRYPT_FAILED" && (
+            <KeyForm disabled={busy} onSubmit={onRetryWithKey} />
           )}
         </div>
       )}
     </div>
-  );
-}
-
-function SourceButton({
-  active,
-  icon,
-  label,
-  onClick,
-}: {
-  active: boolean;
-  icon: React.ReactNode;
-  label: string;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-pressed={active}
-      className={cn(
-        "flex items-center gap-1.5 rounded px-2.5 py-1 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-wave/50",
-        active
-          ? "bg-wave/15 text-wave"
-          : "text-ink-muted hover:bg-surface-overlay hover:text-ink",
-      )}
-    >
-      {icon}
-      {label}
-    </button>
   );
 }

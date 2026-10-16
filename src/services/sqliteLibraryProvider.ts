@@ -18,23 +18,25 @@ export class SqliteReadError extends Error {
   }
 }
 
-function classify(raw: string): SqliteReadError {
+function classify(raw: string, dbPath: string | null): SqliteReadError {
   if (raw === "DB_NOT_FOUND") {
     return new SqliteReadError(
       "DB_NOT_FOUND",
-      "O master.db do Rekordbox não foi encontrado no caminho esperado (AppData\\Roaming\\Pioneer\\rekordbox).",
+      dbPath
+        ? `O master.db não foi encontrado em ${dbPath}.`
+        : "Não encontrei o master.db do Rekordbox no caminho padrão (AppData\\Roaming\\Pioneer\\rekordbox).",
     );
   }
   if (raw === "DECRYPT_FAILED") {
     return new SqliteReadError(
       "DECRYPT_FAILED",
-      "Não foi possível decodificar o master.db com a chave atual.",
+      "Não foi possível decodificar o banco com a chave atual. O arquivo pode não ser um master.db do Rekordbox ou a chave não bate com esta instalação.",
     );
   }
   if (raw.startsWith("SCHEMA_ERROR")) {
     return new SqliteReadError(
       "SCHEMA_ERROR",
-      "O master.db foi decodificado, mas a estrutura das tabelas não bateu com o esperado.",
+      "O banco foi decodificado, mas a estrutura das tabelas não bateu com o esperado.",
     );
   }
   return new SqliteReadError("UNKNOWN", `Erro inesperado ao ler o master.db: ${raw}`);
@@ -42,20 +44,24 @@ function classify(raw: string): SqliteReadError {
 
 /**
  * Lê a biblioteca diretamente do master.db (SQLCipher), sem depender de
- * exportação manual do XML. Ver as premissas não validadas no cabeçalho de
- * src-tauri/src/sqlite_source.rs antes de confiar cegamente no resultado.
+ * exportação manual do XML. `dbPath` null = caminho padrão em AppData
+ * (resolvido pelo Rust); caso contrário, o arquivo escolhido pelo usuário.
  */
 export class SqliteLibraryProvider implements LibraryProvider {
-  constructor(private readonly keyOverride?: string) {}
+  constructor(
+    private readonly dbPath: string | null = null,
+    private readonly keyOverride?: string,
+  ) {}
 
   async loadLibrary(): Promise<RekordboxLibrary> {
     let payload: SqliteLibraryPayload;
     try {
       payload = await invoke<SqliteLibraryPayload>("read_rekordbox_sqlite", {
+        dbPath: this.dbPath,
         keyOverride: this.keyOverride ?? null,
       });
     } catch (error) {
-      throw classify(typeof error === "string" ? error : String(error));
+      throw classify(typeof error === "string" ? error : String(error), this.dbPath);
     }
 
     const tracks = new Map<string, RekordboxTrack>();
