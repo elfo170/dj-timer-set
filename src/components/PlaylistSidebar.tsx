@@ -28,7 +28,7 @@ export function PlaylistSidebar({
   }, [playlists, query]);
 
   return (
-    <aside className="flex h-full w-72 shrink-0 flex-col border-r border-line bg-surface-raised">
+    <aside className="flex h-full w-60 shrink-0 min-[1100px]:w-72 flex-col border-r border-line bg-surface-raised">
       <div className="flex items-center gap-2 px-4 pb-3 pt-4">
         <Disc3 className="h-5 w-5 text-wave" aria-hidden />
         <h1 className="text-sm font-semibold tracking-wide text-ink">

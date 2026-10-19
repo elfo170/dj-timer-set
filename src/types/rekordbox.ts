@@ -1,3 +1,11 @@
+import type { ResolvedCue } from "@/types/cues";
+
+/** Hot cue de uma faixa: índice 0 = A, 1 = B, 2 = C… */
+export interface HotCue {
+  index: number;
+  seconds: number;
+}
+
 /** Uma faixa da coleção do Rekordbox, já normalizada pelo parser. */
 export interface RekordboxTrack {
   /** TrackID do XML (chave usada pelas playlists). */
@@ -10,10 +18,11 @@ export interface RekordboxTrack {
   key: string | null;
   /** Duração total da música, em segundos. */
   totalTimeSeconds: number;
-  /** Posição do Hot Cue A em segundos (null quando não existe). */
-  hotCueASeconds: number | null;
-  /** Posição do Hot Cue B em segundos (null quando não existe). */
-  hotCueBSeconds: number | null;
+  /**
+   * Hot cues existentes na faixa, ordenados por índice (A, B, C…).
+   * Memory cues não entram aqui.
+   */
+  hotCues: HotCue[];
 }
 
 /** Playlist do Rekordbox (nó folha na árvore de playlists). */
@@ -36,7 +45,15 @@ export interface RekordboxLibrary {
 export interface SetTrackRow {
   position: number;
   track: RekordboxTrack;
-  /** Tempo efetivo (HCB − HCA) em segundos. */
+  /** Ponto inicial / final efetivamente usados nesta faixa. */
+  start: ResolvedCue;
+  end: ResolvedCue;
+  /** true quando o ponto vem de uma exceção da faixa (não do padrão da playlist). */
+  startOverridden: boolean;
+  endOverridden: boolean;
+  /** true quando o ponto final está antes do inicial (tempo vira 0). */
+  inverted: boolean;
+  /** Tempo efetivo (ponto final − ponto inicial) em segundos, nunca negativo. */
   effectiveSeconds: number;
 }
 

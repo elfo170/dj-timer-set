@@ -1,4 +1,6 @@
+import { MAX_HOT_CUE_INDEX } from "@/utils/cues";
 import type {
+  HotCue,
   RekordboxLibrary,
   RekordboxPlaylist,
   RekordboxTrack,
@@ -14,7 +16,7 @@ import type {
  *     PLAYLISTS  > NODE (Type="0" = pasta, Type="1" = playlist)
  *                   playlists contêm TRACK com atributo Key = TrackID
  *
- * Hot cues são POSITION_MARK com Num >= 0 (Num="0" = A, Num="1" = B).
+ * Hot cues são POSITION_MARK com Num >= 0 (Num="0" = A, "1" = B, "2" = C…).
  * Memory cues têm Num="-1" e são ignorados.
  */
 export function parseRekordboxXml(xml: string): RekordboxLibrary {
@@ -44,8 +46,6 @@ function parseCollection(root: Element): Map<string, RekordboxTrack> {
     const id = el.getAttribute("TrackID");
     if (!id) continue;
 
-    const { hotCueASeconds, hotCueBSeconds } = parseHotCues(el);
-
     tracks.set(id, {
       id,
       title: el.getAttribute("Name") ?? "(sem título)",
@@ -53,31 +53,28 @@ function parseCollection(root: Element): Map<string, RekordboxTrack> {
       bpm: parseOptionalNumber(el.getAttribute("AverageBpm")),
       key: emptyToNull(el.getAttribute("Tonality")),
       totalTimeSeconds: parseOptionalNumber(el.getAttribute("TotalTime")) ?? 0,
-      hotCueASeconds,
-      hotCueBSeconds,
+      hotCues: parseHotCues(el),
     });
   }
 
   return tracks;
 }
 
-function parseHotCues(trackEl: Element): {
-  hotCueASeconds: number | null;
-  hotCueBSeconds: number | null;
-} {
-  let hotCueASeconds: number | null = null;
-  let hotCueBSeconds: number | null = null;
+function parseHotCues(trackEl: Element): HotCue[] {
+  // índice do hot cue -> segundos (se houver duplicata, vale o último)
+  const byIndex = new Map<number, number>();
 
   for (const mark of trackEl.querySelectorAll(":scope > POSITION_MARK")) {
-    const num = mark.getAttribute("Num");
+    const num = parseOptionalNumber(mark.getAttribute("Num"));
     const start = parseOptionalNumber(mark.getAttribute("Start"));
-    if (start === null) continue;
-
-    if (num === "0") hotCueASeconds = start;
-    else if (num === "1") hotCueBSeconds = start;
+    if (num === null || start === null) continue;
+    if (!Number.isInteger(num) || num < 0 || num > MAX_HOT_CUE_INDEX) continue; // -1 = memory cue
+    byIndex.set(num, start);
   }
 
-  return { hotCueASeconds, hotCueBSeconds };
+  return [...byIndex.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([index, seconds]) => ({ index, seconds }));
 }
 
 function parsePlaylists(root: Element): RekordboxPlaylist[] {
