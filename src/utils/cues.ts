@@ -31,7 +31,7 @@ export function hotCueRef(index: number): CueRef {
   return `hc:${index}`;
 }
 
-function hotCueIndexOf(ref: CueRef): number | null {
+export function hotCueIndexOf(ref: CueRef): number | null {
   return ref.startsWith("hc:") ? Number(ref.slice(3)) : null;
 }
 
@@ -71,6 +71,14 @@ export function resolveCue(
     seconds: role === "start" ? 0 : track.totalTimeSeconds,
     fallback: true,
   };
+}
+
+/** Posição (em segundos) do ponto na faixa, ou null se o hot cue não existe nela. */
+export function cueSecondsOf(track: RekordboxTrack, ref: CueRef): number | null {
+  if (ref === "track-start") return 0;
+  if (ref === "track-end") return track.totalTimeSeconds;
+  const index = hotCueIndexOf(ref);
+  return track.hotCues.find((cue) => cue.index === index)?.seconds ?? null;
 }
 
 export interface CueOption {

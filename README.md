@@ -67,8 +67,10 @@ Agora isso é configurável:
 
 - **Na playlist inteira:** a barra "Pontos do cálculo (playlist)" tem um seletor de **Início** e outro de **Fim**
   (início da faixa, qualquer Hot Cue A–H…, fim da faixa). Vale para todas as faixas da playlist.
-- **Por faixa:** cada linha da tabela tem seus próprios seletores de Início e Fim. A opção
-  "Padrão (…)" volta a faixa a seguir a playlist; qualquer outra escolha vira uma exceção (destacada em cor).
+- **Por faixa:** cada linha tem botões (chips) de Início e Fim: o início da faixa (⇤), os hot cues A, B, C… e
+  o fim da faixa (⇥). O chip suave é o padrão da playlist; clicar em outro cria uma exceção (chip preenchido);
+  clicar de novo no chip preenchido — ou no chip do padrão — volta a faixa a seguir a playlist. Hot cues que a
+  faixa não tem aparecem tracejados e desabilitados; passe o mouse num chip para ver o tempo daquele ponto.
 - **Hot cue ausente:** se a faixa não tem o hot cue escolhido, o início cai em 00:00 e o fim na duração
   total (tempo em itálico, com dica ao passar o mouse). Fim antes do início → tempo 00:00, destacado em vermelho.
 - **"Restaurar padrão"** volta a playlist para A → B e remove todas as exceções.
@@ -78,3 +80,9 @@ Agora isso é configurável:
 Hot cues C em diante no `master.db` são lidos por inferência (Kind=3 → C…), seguindo o padrão de A/B (já
 validado em máquina real); vale conferir contra o XML se usar muitos hot cues.
 
+## Roadmap
+
+### v1.0 (planejado)
+- Cores e nomes reais dos hot cues do Rekordbox nos botões de Início/Fim (cor e rótulo do cue no lugar da
+  letra), lendo cor e nome do cue no XML (`POSITION_MARK`) e no `master.db` (`djmdCue`) — campos exatos a
+  confirmar contra um banco real.
