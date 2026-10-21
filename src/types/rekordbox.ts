@@ -1,9 +1,13 @@
 import type { ResolvedCue } from "@/types/cues";
 
-/** Hot cue de uma faixa: índice 0 = A, 1 = B, 2 = C… */
+/** Hot cue de uma faixa: índice 0 = A, 1 = B… 7 = H. */
 export interface HotCue {
   index: number;
   seconds: number;
+  /** Cor do cue no Rekordbox, em "#RRGGBB" (null = desconhecida). */
+  color: string | null;
+  /** Nome/comentário dado ao cue no Rekordbox (null = sem nome). */
+  name: string | null;
 }
 
 /** Uma faixa da coleção do Rekordbox, já normalizada pelo parser. */

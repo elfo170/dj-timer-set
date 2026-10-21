@@ -10,8 +10,9 @@ import type { RekordboxTrack } from "@/types/rekordbox";
 export const DEFAULT_START_REF: CueRef = "hc:0";
 export const DEFAULT_END_REF: CueRef = "hc:1";
 
-/** Maior índice de hot cue suportado (25 = Z). */
-export const MAX_HOT_CUE_INDEX = 25;
+/** Hot cues suportados: A–H (índices 0–7), os que o Rekordbox grava de forma verificada. */
+export const HOT_CUE_COUNT = 8;
+export const MAX_HOT_CUE_INDEX = HOT_CUE_COUNT - 1;
 
 export function createDefaultSettings(): PlaylistCueSettings {
   return { start: DEFAULT_START_REF, end: DEFAULT_END_REF, overrides: {} };
@@ -21,7 +22,7 @@ export function isDefaultGlobal(settings: PlaylistCueSettings): boolean {
   return settings.start === DEFAULT_START_REF && settings.end === DEFAULT_END_REF;
 }
 
-const CUE_REF_PATTERN = /^(?:track-start|track-end|hc:(?:\d|1\d|2[0-5]))$/;
+const CUE_REF_PATTERN = /^(?:track-start|track-end|hc:[0-7])$/;
 
 export function isCueRef(value: unknown): value is CueRef {
   return typeof value === "string" && CUE_REF_PATTERN.test(value);
@@ -79,38 +80,6 @@ export function cueSecondsOf(track: RekordboxTrack, ref: CueRef): number | null 
   if (ref === "track-end") return track.totalTimeSeconds;
   const index = hotCueIndexOf(ref);
   return track.hotCues.find((cue) => cue.index === index)?.seconds ?? null;
-}
-
-export interface CueOption {
-  value: CueRef;
-  label: string;
-}
-
-/**
- * Opções de um seletor de ponto de corte. "start" oferece o início da faixa +
- * hot cues; "end" oferece hot cues + o fim da faixa. `extra` garante que um
- * valor já escolhido apareça mesmo que o hot cue não exista (marcado como ausente).
- */
-export function buildCueOptions(
-  role: CueRole,
-  hotCueIndexes: number[],
-  extra?: CueRef,
-): CueOption[] {
-  const refs: CueRef[] = [];
-  if (role === "start") refs.push("track-start");
-  for (const index of [...new Set(hotCueIndexes)].sort((a, b) => a - b)) {
-    refs.push(hotCueRef(index));
-  }
-  if (role === "end") refs.push("track-end");
-
-  const options: CueOption[] = refs.map((ref) => ({
-    value: ref,
-    label: cueOptionLabel(ref),
-  }));
-  if (extra && !refs.includes(extra)) {
-    options.push({ value: extra, label: `${cueOptionLabel(extra)} — ausente` });
-  }
-  return options;
 }
 
 /** Índices de hot cue presentes nas faixas (sempre inclui A e B). */
