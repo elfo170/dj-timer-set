@@ -48,10 +48,10 @@ export function TrackTable({ rows, settings, onChangeTrackCue }: TrackTableProps
               BPM
             </TableHead>
             <TableHead className="hidden w-14 px-2 min-[1100px]:table-cell">Key</TableHead>
-            <TableHead className="w-[11rem] px-2 min-[1500px]:w-[14rem]">
+            <TableHead className="w-[11.5rem] px-2">
               <span className="text-cueA">Início</span>
             </TableHead>
-            <TableHead className="w-[11rem] px-2 min-[1500px]:w-[14rem]">
+            <TableHead className="w-[11.5rem] px-2">
               <span className="text-cueB">Fim</span>
             </TableHead>
             <TableHead className="w-[4.5rem] px-2 text-right">Tempo</TableHead>
@@ -62,10 +62,10 @@ export function TrackTable({ rows, settings, onChangeTrackCue }: TrackTableProps
             const { position, track, effectiveSeconds } = row;
             return (
               <TableRow key={`${position}-${track.id}`}>
-                <TableCell className="px-2 text-right font-mono text-xs text-ink-faint">
+                <TableCell className="px-2 py-1.5 text-right font-mono text-xs text-ink-faint">
                   {position}
                 </TableCell>
-                <TableCell className="px-2">
+                <TableCell className="px-2 py-1.5">
                   <div className="truncate font-medium text-ink" title={track.title}>
                     {track.title}
                   </div>
@@ -73,18 +73,18 @@ export function TrackTable({ rows, settings, onChangeTrackCue }: TrackTableProps
                     {track.artist || "—"}
                   </div>
                 </TableCell>
-                <TableCell className="hidden px-2 min-[1280px]:table-cell">
+                <TableCell className="hidden px-2 py-1.5 min-[1280px]:table-cell">
                   <div className="truncate text-ink-muted" title={track.artist}>
                     {track.artist || "—"}
                   </div>
                 </TableCell>
-                <TableCell className="hidden px-2 text-right font-mono text-ink-muted min-[1100px]:table-cell">
+                <TableCell className="hidden px-2 py-1.5 text-right font-mono text-ink-muted min-[1100px]:table-cell">
                   {track.bpm !== null ? track.bpm.toFixed(1) : "—"}
                 </TableCell>
-                <TableCell className="hidden px-2 font-mono text-ink-muted min-[1100px]:table-cell">
+                <TableCell className="hidden px-2 py-1.5 font-mono text-ink-muted min-[1100px]:table-cell">
                   {track.key ?? "—"}
                 </TableCell>
-                <TableCell className="px-2">
+                <TableCell className="px-2 py-1.5">
                   <CueCell
                     role="start"
                     row={row}
@@ -92,7 +92,7 @@ export function TrackTable({ rows, settings, onChangeTrackCue }: TrackTableProps
                     onChange={(ref) => onChangeTrackCue(track.id, "start", ref)}
                   />
                 </TableCell>
-                <TableCell className="px-2">
+                <TableCell className="px-2 py-1.5">
                   <CueCell
                     role="end"
                     row={row}
@@ -102,7 +102,7 @@ export function TrackTable({ rows, settings, onChangeTrackCue }: TrackTableProps
                 </TableCell>
                 <TableCell
                   className={cn(
-                    "px-2 text-right font-mono font-semibold",
+                    "px-2 py-1.5 text-right font-mono font-semibold",
                     row.inverted ? "text-alert" : "text-wave",
                   )}
                   title={

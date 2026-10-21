@@ -1,3 +1,4 @@
+import { rgbToHex } from "@/utils/color";
 import { MAX_HOT_CUE_INDEX } from "@/utils/cues";
 import type {
   HotCue,
@@ -61,20 +62,27 @@ function parseCollection(root: Element): Map<string, RekordboxTrack> {
 }
 
 function parseHotCues(trackEl: Element): HotCue[] {
-  // índice do hot cue -> segundos (se houver duplicata, vale o último)
-  const byIndex = new Map<number, number>();
+  // índice do hot cue -> cue (se houver duplicata, vale o último)
+  const byIndex = new Map<number, HotCue>();
 
   for (const mark of trackEl.querySelectorAll(":scope > POSITION_MARK")) {
     const num = parseOptionalNumber(mark.getAttribute("Num"));
     const start = parseOptionalNumber(mark.getAttribute("Start"));
     if (num === null || start === null) continue;
-    if (!Number.isInteger(num) || num < 0 || num > MAX_HOT_CUE_INDEX) continue; // -1 = memory cue
-    byIndex.set(num, start);
+    // Num = -1 é memory cue; só A–H são suportados.
+    if (!Number.isInteger(num) || num < 0 || num > MAX_HOT_CUE_INDEX) continue;
+
+    const red = parseOptionalNumber(mark.getAttribute("Red"));
+    const green = parseOptionalNumber(mark.getAttribute("Green"));
+    const blue = parseOptionalNumber(mark.getAttribute("Blue"));
+    const color =
+      red !== null && green !== null && blue !== null ? rgbToHex(red, green, blue) : null;
+    const name = mark.getAttribute("Name")?.trim() || null;
+
+    byIndex.set(num, { index: num, seconds: start, color, name });
   }
 
-  return [...byIndex.entries()]
-    .sort((a, b) => a[0] - b[0])
-    .map(([index, seconds]) => ({ index, seconds }));
+  return [...byIndex.values()].sort((a, b) => a.index - b.index);
 }
 
 function parsePlaylists(root: Element): RekordboxPlaylist[] {

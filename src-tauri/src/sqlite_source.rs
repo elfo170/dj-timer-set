@@ -29,16 +29,17 @@
 //!    Contorno manual: usar a função save_sqlcipher_key com uma chave obtida via
 //!    ferramentas de terceiros (ex.: CLI do pyrekordbox, RekordLocksmith).
 //!
-//! 2. MAPEAMENTO Kind → Hot Cue (ver `FIRST_HOT_CUE_KIND` / `LAST_HOT_CUE_KIND`)
-//!    A tabela djmdCue guarda `Kind = 0` para memory cue e "o número do hot cue"
-//!    para os demais, sem a documentação especificar se a numeração começa em
-//!    0 ou 1. Assumimos Kind=1 → Hot Cue A e Kind=2 → Hot Cue B (analogia com o
-//!    XML, que usa Num="0"/Num="1" para A/B com Num="-1" para memory cue — aqui
-//!    parece haver um deslocamento de +1). Validar comparando os tempos exibidos
-//!    no app (fonte = banco) com os mesmos exibidos com a fonte = XML para a
-//!    mesma playlist.
-//!    VALIDADO em máquina real: Kind=1 → A e Kind=2 → B. Kind=3.. → C.. segue o
-//!    mesmo padrão, mas é INFERIDO (ainda não conferido contra um master.db real).
+//! 2. MAPEAMENTO Kind → Hot Cue (ver `HOT_CUE_KINDS`)
+//!    VERIFICADO contra um master.db real do Rekordbox 7 (takayamaki/rbx#7, 28.883
+//!    cues): hot cues A–C são Kind 1–3, **Kind 4 é loop (não é hot cue)** e D–H são
+//!    Kind 5–9. Kind 0 = memory cue. (A v0.3.0 assumia Kind N → letra N, o que
+//!    deslocava D–H; A e B, os únicos conferidos naquela época, não eram afetados.)
+//!
+//! 2b. CORES E NOMES DOS HOT CUES
+//!    `ColorTableIndex` (0/NULL = sem cor própria → verde padrão) indexa a paleta
+//!    de hot cues do Rekordbox (`HOT_CUE_PALETTE`), conferida na tela por quem fez
+//!    o CueGen (Deep-Symmetry/beat-link#51). O nome do cue vem de `Comment`. Se a
+//!    instalação não tiver essas colunas, a leitura continua e só perde cor/nome.
 //!
 //! 3. ESCALA DO BPM (`bpm_raw / 100.0` em `track_from_row`)
 //!    A documentação da tabela djmdContent não confirma a unidade da coluna BPM.
@@ -60,7 +61,7 @@
 
 use rusqlite::{types::Value as SqlValue, Connection, OpenFlags};
 use serde::Serialize;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 
 use crate::rekordbox_paths::default_master_db_path;
@@ -74,18 +75,50 @@ use crate::rekordbox_paths::default_master_db_path;
 const DEFAULT_KEY_HEX: &str =
     "402fd482c38817c35ffa8ffb8c7d93143b749e7d315df7a81732a1ff43608497";
 
-/// Ver nota (2) no cabeçalho do arquivo.
-/// Kind=1 → Hot Cue A (índice 0), Kind=2 → B (índice 1), e assim por diante.
-const FIRST_HOT_CUE_KIND: i64 = 1;
-/// Limite defensivo (A–P): valores acima disso não são tratados como hot cue.
-const LAST_HOT_CUE_KIND: i64 = 16;
+/// Kinds de hot cue no djmdCue, na ordem das letras A–H (ver nota 2 no cabeçalho).
+/// Kind 4 fica de fora de propósito: no Rekordbox é loop, não hot cue.
+const HOT_CUE_KINDS: [i64; 8] = [1, 2, 3, 5, 6, 7, 8, 9];
 
-/// Hot cue de uma faixa: `index` 0 = A, 1 = B, 2 = C…
+/// Paleta de hot cues do Rekordbox: `ColorTableIndex` → RGB. Índice 0 (e qualquer
+/// valor fora da tabela) é o verde padrão. Fonte: Deep-Symmetry/beat-link#51.
+const HOT_CUE_PALETTE: [(u8, u8, u8); 63] = [
+    (0x28,0xe2,0x14), (0x30,0x5a,0xff), (0x50,0x73,0xff), (0x50,0x8c,0xff),
+    (0x50,0xa0,0xff), (0x50,0xb4,0xff), (0x50,0xb0,0xf2), (0x50,0xae,0xe8),
+    (0x45,0xac,0xdb), (0x00,0xe0,0xff), (0x19,0xda,0xf0), (0x32,0xd2,0xe6),
+    (0x21,0xb4,0xb9), (0x20,0xaa,0xa0), (0x1f,0xa3,0x92), (0x19,0xa0,0x8c),
+    (0x14,0xa5,0x84), (0x14,0xaa,0x7d), (0x10,0xb1,0x76), (0x30,0xd2,0x6e),
+    (0x37,0xde,0x5a), (0x3c,0xeb,0x50), (0x28,0xe2,0x14), (0x7d,0xc1,0x3d),
+    (0x8c,0xc8,0x32), (0x9b,0xd7,0x23), (0xa5,0xe1,0x16), (0xa5,0xdc,0x0a),
+    (0xaa,0xd2,0x08), (0xb4,0xc8,0x05), (0xb4,0xbe,0x04), (0xba,0xb4,0x04),
+    (0xc3,0xaf,0x04), (0xe1,0xaa,0x00), (0xff,0xa0,0x00), (0xff,0x96,0x00),
+    (0xff,0x8c,0x00), (0xff,0x75,0x00), (0xe0,0x64,0x1b), (0xe0,0x46,0x1e),
+    (0xe0,0x30,0x1e), (0xe0,0x28,0x23), (0xe6,0x28,0x28), (0xff,0x37,0x6f),
+    (0xff,0x2d,0x6f), (0xff,0x12,0x7b), (0xf5,0x1e,0x8c), (0xeb,0x2d,0xa0),
+    (0xe6,0x37,0xb4), (0xde,0x44,0xcf), (0xde,0x44,0x8d), (0xe6,0x30,0xb4),
+    (0xe6,0x19,0xdc), (0xe6,0x00,0xff), (0xdc,0x00,0xff), (0xcc,0x00,0xff),
+    (0xb4,0x32,0xff), (0xb9,0x3c,0xff), (0xc5,0x42,0xff), (0xaa,0x5a,0xff),
+    (0xaa,0x72,0xff), (0x82,0x72,0xff), (0x64,0x73,0xff),
+];
+
+/// "#RRGGBB" da cor do hot cue; sem cor própria (NULL/0/fora da tabela) = verde padrão.
+fn hot_cue_color_hex(color_table_index: Option<i64>) -> String {
+    let (r, g, b) = match color_table_index {
+        Some(i) if i >= 1 && (i as usize) < HOT_CUE_PALETTE.len() => HOT_CUE_PALETTE[i as usize],
+        _ => HOT_CUE_PALETTE[0],
+    };
+    format!("#{r:02X}{g:02X}{b:02X}")
+}
+
+/// Hot cue de uma faixa: `index` 0 = A, 1 = B… 7 = H.
 #[derive(Serialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct HotCueDto {
     pub index: u32,
     pub seconds: f64,
+    /// "#RRGGBB" na cor que o Rekordbox usa para este cue.
+    pub color: String,
+    /// Nome (comentário) do cue, se houver.
+    pub name: Option<String>,
 }
 
 #[derive(Serialize, Debug)]
@@ -281,42 +314,79 @@ fn value_to_opt_f64(v: SqlValue) -> Option<f64> {
 /// Hot cues por faixa, já ordenados por índice.
 type CueMap = HashMap<String, Vec<HotCueDto>>;
 
-fn read_cues(conn: &Connection) -> rusqlite::Result<CueMap> {
-    let mut stmt = conn.prepare(
-        "SELECT ContentID, Kind, InMsec FROM djmdCue WHERE Kind BETWEEN ?1 AND ?2",
-    )?;
-    // Por faixa: índice do hot cue -> segundos (duplicata: vale a última linha lida).
-    let mut by_track: HashMap<String, BTreeMap<u32, f64>> = HashMap::new();
+fn table_columns(conn: &Connection, table: &str) -> rusqlite::Result<HashSet<String>> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let names = stmt
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<Result<HashSet<_>, _>>()?;
+    Ok(names)
+}
 
-    let rows = stmt.query_map([FIRST_HOT_CUE_KIND, LAST_HOT_CUE_KIND], |row| {
+fn value_to_opt_i64(value: SqlValue) -> Option<i64> {
+    match value {
+        SqlValue::Integer(i) => Some(i),
+        SqlValue::Real(f) => Some(f as i64),
+        SqlValue::Text(t) => t.trim().parse().ok(),
+        _ => None,
+    }
+}
+
+fn read_cues(conn: &Connection) -> rusqlite::Result<CueMap> {
+    // Cor e nome são opcionais: se a instalação não tiver as colunas, só perdemos isso.
+    let columns = table_columns(conn, "djmdCue")?;
+    let color_expr = if columns.contains("ColorTableIndex") { "ColorTableIndex" } else { "NULL" };
+    let name_expr = if columns.contains("Comment") { "Comment" } else { "NULL" };
+    let kinds = HOT_CUE_KINDS.map(|k| k.to_string()).join(",");
+
+    let mut stmt = conn.prepare(&format!(
+        "SELECT ContentID, Kind, InMsec, {color_expr}, {name_expr} FROM djmdCue WHERE Kind IN ({kinds})"
+    ))?;
+    // Por faixa: índice do hot cue -> cue (duplicata: vale a última linha lida).
+    let mut by_track: HashMap<String, BTreeMap<u32, HotCueDto>> = HashMap::new();
+
+    let rows = stmt.query_map([], |row| {
         let content_id: SqlValue = row.get(0)?;
         let kind: i64 = row.get(1)?;
         let in_msec: SqlValue = row.get(2)?;
-        Ok((value_to_id_string(content_id), kind, value_to_opt_f64(in_msec)))
+        let color_index: SqlValue = row.get(3)?;
+        let comment: SqlValue = row.get(4)?;
+        Ok((
+            value_to_id_string(content_id),
+            kind,
+            value_to_opt_f64(in_msec),
+            value_to_opt_i64(color_index),
+            match comment {
+                SqlValue::Text(t) => Some(t),
+                _ => None,
+            },
+        ))
     })?;
 
     for row in rows {
-        let (content_id, kind, in_msec) = row?;
+        let (content_id, kind, in_msec, color_index, comment) = row?;
         let Some(ms) = in_msec else { continue };
         if ms < 0.0 {
             continue;
         }
-        let index = (kind - FIRST_HOT_CUE_KIND) as u32;
-        by_track
-            .entry(content_id)
-            .or_default()
-            .insert(index, ms / 1000.0);
+        let Some(index) = HOT_CUE_KINDS.iter().position(|&k| k == kind) else {
+            continue;
+        };
+        let index = index as u32;
+        let name = comment.map(|c| c.trim().to_string()).filter(|c| !c.is_empty());
+        by_track.entry(content_id).or_default().insert(
+            index,
+            HotCueDto {
+                index,
+                seconds: ms / 1000.0,
+                color: hot_cue_color_hex(color_index),
+                name,
+            },
+        );
     }
 
     Ok(by_track
         .into_iter()
-        .map(|(content_id, cues)| {
-            let sorted = cues
-                .into_iter()
-                .map(|(index, seconds)| HotCueDto { index, seconds })
-                .collect();
-            (content_id, sorted)
-        })
+        .map(|(content_id, cues)| (content_id, cues.into_values().collect()))
         .collect())
 }
 
@@ -523,7 +593,7 @@ mod tests {
             CREATE TABLE djmdContent (ID TEXT, Title TEXT, ArtistID TEXT, BPM INTEGER, KeyID TEXT, Length REAL);
             CREATE TABLE djmdArtist (ID TEXT, Name TEXT);
             CREATE TABLE djmdKey (ID TEXT, ScaleName TEXT);
-            CREATE TABLE djmdCue (ContentID TEXT, Kind INTEGER, InMsec REAL);
+            CREATE TABLE djmdCue (ContentID TEXT, Kind INTEGER, InMsec REAL, ColorTableIndex INTEGER, Comment TEXT);
             CREATE TABLE djmdPlaylist (ID TEXT, Seq INTEGER, Name TEXT, Attribute INTEGER, ParentID TEXT);
             CREATE TABLE djmdSongPlaylist (PlaylistID TEXT, ContentID TEXT, TrackNo INTEGER);
 
@@ -537,11 +607,14 @@ mod tests {
             -- Track 3: sem cues
             INSERT INTO djmdContent VALUES ('t3', 'Sem cues', NULL, NULL, NULL, 200.0);
 
-            INSERT INTO djmdCue VALUES ('t1', 1, 38000);   -- Hot Cue A aos 38s
-            INSERT INTO djmdCue VALUES ('t1', 0, 5000);    -- memory cue, deve ser ignorado
-            INSERT INTO djmdCue VALUES ('t2', 1, 30000);
-            INSERT INTO djmdCue VALUES ('t2', 3, 200000);  -- Hot Cue C, inserido antes do B de propósito
-            INSERT INTO djmdCue VALUES ('t2', 2, 330000);
+            INSERT INTO djmdCue VALUES ('t1', 1, 38000, 36, 'Drop');  -- Hot Cue A aos 38s, laranja, nomeado
+            INSERT INTO djmdCue VALUES ('t1', 0, 5000, NULL, NULL);   -- memory cue, deve ser ignorado
+            INSERT INTO djmdCue VALUES ('t2', 1, 30000, NULL, NULL);  -- A sem cor própria -> verde padrão
+            INSERT INTO djmdCue VALUES ('t2', 3, 200000, 1, NULL);    -- C, inserido antes do B de propósito
+            INSERT INTO djmdCue VALUES ('t2', 2, 330000, 62, NULL);   -- B
+            INSERT INTO djmdCue VALUES ('t2', 4, 100000, 5, NULL);    -- Kind 4 = LOOP, não é hot cue
+            INSERT INTO djmdCue VALUES ('t2', 5, 60000, 22, NULL);    -- Kind 5 = Hot Cue D
+            INSERT INTO djmdCue VALUES ('t2', 9, 380000, 9, '   ');   -- Kind 9 = Hot Cue H, nome em branco
 
             INSERT INTO djmdPlaylist VALUES ('folder1', 1, 'Sets', 1, NULL);
             INSERT INTO djmdPlaylist VALUES ('pl1', 1, 'Set Teste', 0, 'folder1');
@@ -594,9 +667,14 @@ mod tests {
         let t2 = payload.tracks.iter().find(|t| t.id == "t2").unwrap();
         assert_eq!(
             cues_of(t2),
-            vec![(0, 30.0), (1, 330.0), (2, 200.0)],
-            "todos os hot cues (A, B, C…), ordenados por índice"
+            vec![(0, 30.0), (1, 330.0), (2, 200.0), (3, 60.0), (7, 380.0)],
+            "A–C = Kind 1–3, Kind 4 (loop) ignorado, D–H = Kind 5–9; ordenados por índice"
         );
+        let colors: Vec<&str> = t2.hot_cues.iter().map(|c| c.color.as_str()).collect();
+        assert_eq!(colors, vec!["#28E214", "#6473FF", "#305AFF", "#28E214", "#00E0FF"]);
+        assert!(t2.hot_cues.iter().all(|c| c.name.is_none()), "nome em branco vira None");
+        assert_eq!(t1.hot_cues[0].color, "#FF8C00");
+        assert_eq!(t1.hot_cues[0].name.as_deref(), Some("Drop"));
 
         let t3 = payload.tracks.iter().find(|t| t.id == "t3").unwrap();
         assert_eq!(t3.artist, "", "artista nulo vira string vazia, não erro");
@@ -626,5 +704,35 @@ mod tests {
 
         let result = read_library_from_path(&path, TEST_KEY_HEX);
         assert_eq!(result.unwrap_err(), "DB_NOT_FOUND");
+    }
+
+    #[test]
+    fn paleta_de_cores_dos_hot_cues() {
+        assert_eq!(hot_cue_color_hex(Some(1)), "#305AFF");
+        assert_eq!(hot_cue_color_hex(Some(36)), "#FF8C00"); // laranja (hot loops, conferido por terceiros)
+        assert_eq!(hot_cue_color_hex(Some(62)), "#6473FF");
+        for sem_cor in [None, Some(0), Some(63), Some(255), Some(-1)] {
+            assert_eq!(hot_cue_color_hex(sem_cor), "#28E214", "{sem_cor:?} deve cair no verde padrão");
+        }
+    }
+
+    #[test]
+    fn schema_sem_colunas_de_cor_e_nome_continua_lendo() {
+        let path = build_synthetic_db("sem_colunas");
+        {
+            let conn = Connection::open(&path).expect("abrir db de teste");
+            conn.execute_batch(&format!("PRAGMA key = \"x'{TEST_KEY_HEX}'\";")).expect("chave");
+            conn.execute_batch(
+                "ALTER TABLE djmdCue DROP COLUMN ColorTableIndex; ALTER TABLE djmdCue DROP COLUMN Comment;",
+            )
+            .expect("remover colunas");
+        }
+        let payload = read_library_from_path(&path, TEST_KEY_HEX).expect("leitura sem colunas opcionais");
+        let _ = std::fs::remove_file(&path);
+
+        let t1 = payload.tracks.iter().find(|t| t.id == "t1").expect("t1");
+        assert_eq!(cues_of(t1), vec![(0, 38.0)]);
+        assert_eq!(t1.hot_cues[0].color, "#28E214", "sem a coluna de cor: verde padrão");
+        assert_eq!(t1.hot_cues[0].name, None, "sem a coluna de nome: sem nome");
     }
 }
